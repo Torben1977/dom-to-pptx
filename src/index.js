@@ -28,6 +28,7 @@ import {
   generateCustomShapeSVG,
   getUsedFontFamilies,
   getAutoDetectedFonts,
+  extractSpeakerNotesFromElement,
   classifyFontVariant,
   detectVariantSlotCollisions,
   extractTableData,
@@ -139,6 +140,18 @@ export async function exportToPptx(target, options = {}) {
       _slideIndex: slideIndex,
       _animations: [],
     };
+
+    // Extract speaker notes from any element inside the slide root that
+    // carries a data-pptx-notes attribute. Recognises <template
+    // data-pptx-notes> (inert content), <div data-pptx-notes hidden>,
+    // and any other tag with the attribute. Multiple matches concatenate.
+    // Notes are attached BEFORE processSlide runs so users can freely
+    // place notes wherever they like without worrying about ordering.
+    const notesText = extractSpeakerNotesFromElement(root);
+    if (notesText) {
+      slide.addNotes(notesText);
+    }
+
     await processSlide(root, slide, pptx, slideOptions);
     slideAnimations[slideIndex] = slideOptions._animations;
     slideIndex++;

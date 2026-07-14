@@ -1115,6 +1115,59 @@ function extractFontUrl(srcStr) {
 }
 
 /**
+ * Extract PowerPoint speaker-notes text from a slide root element.
+ *
+ * DOM convention: any descendant of the slide root carrying a
+ * `data-pptx-notes` attribute contributes its text content to the
+ * slide's speaker-notes pane. Elements without the attribute are
+ * ignored; elements with the attribute but no text content are ignored
+ * (so a stray empty `<template data-pptx-notes>` is harmless).
+ *
+ * Multiple annotated elements concatenate in document order, separated
+ * by a blank line.
+ *
+ * Three usage patterns work interchangeably:
+ *
+ *   <template data-pptx-notes>
+ *     Speaker notes here. `<template>` content is inert in the DOM so
+ *     the notes never render on-slide.
+ *   </template>
+ *
+ *   <div data-pptx-notes hidden>
+ *     Also fine. `hidden` keeps the div off-slide visually.
+ *   </div>
+ *
+ *   <p data-pptx-notes style="display: none">
+ *     Any element, hidden however you prefer.
+ *   </p>
+ *
+ * If the annotated element is visible (no `hidden`, no CSS `display:
+ * none`), its text will appear both on the slide and in the notes pane.
+ * That is user error, not a defect of this extractor.
+ *
+ * @param {Element} root
+ * @returns {string} Notes text, trimmed. Empty string if no notes.
+ */
+export function extractSpeakerNotesFromElement(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return '';
+  const nodes = root.querySelectorAll('[data-pptx-notes]');
+  const parts = [];
+  for (const node of Array.from(nodes)) {
+    // <template> stores its markup in a DocumentFragment on `.content`;
+    // its own `.textContent` is empty. Fall back to `.textContent` for
+    // every other element type.
+    const isTemplate = node.tagName && node.tagName.toLowerCase() === 'template';
+    const raw = isTemplate && node.content ? node.content.textContent : node.textContent;
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    if (trimmed) parts.push(trimmed);
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * Scans document.styleSheets to find @font-face URLs for the requested families.
+ * Returns an array of { name, url } objects.
  * Walk a list of CSSStyleSheet-like objects and collect @font-face
  * declarations whose family matches usedFamilies.
  *
