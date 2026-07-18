@@ -821,13 +821,12 @@ export function buildTimingXml(animations, domToSpIdMap, textBoxSpIds) {
   const bldLst =
     animatedSpids.length > 0
       ? `<p:bldLst>${animatedSpids
-          .filter((s) => !textBoxSpIds || textBoxSpIds.has(s))
           .map((s) => {
             const buildType = shapeBuilds.get(s);
             if (buildType === 'p') {
               return `<p:bldP spid="${s}" grpId="0" build="p" animBg="1"/>`;
             }
-            // animBg="1" is required for all animated textboxes in bldLst —
+            // animBg="1" is required for all animated shapes in bldLst —
             // this matches how PowerPoint's own export always formats bldP entries.
             return `<p:bldP spid="${s}" grpId="0" animBg="1"/>`;
           })

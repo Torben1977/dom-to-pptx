@@ -67,7 +67,7 @@ export function extractTableData(node, scale) {
   const trList = node.querySelectorAll('tr');
   trList.forEach((tr) => {
     const rowData = [];
-    const cellList = Array.from(tr.children).filter((c) => ['td', 'th'].includes(c.tagName.toLowerCase()));
+    const cellList = Array.from(tr.children).filter((c) => ['td', 'th'].includes((c?.tagName || '').toLowerCase()));
 
     cellList.forEach((cell) => {
       const style = window.getComputedStyle(cell);
@@ -621,12 +621,13 @@ export function isTextContainer(node) {
   if (children.length === 0) return true;
 
   const isSafeInline = (el) => {
+    const tag = (el?.tagName || '').toLowerCase();
     // 1. Reject Web Components / Custom Elements
-    if (el.tagName.includes('-')) return false;
+    if (tag.includes('-')) return false;
     // 2. Reject Explicit Images/SVGs
-    if (el.tagName.toLowerCase() === 'img' || el.tagName.toLowerCase() === 'svg') return false;
+    if (tag === 'img' || tag === 'svg') return false;
 
-    if (el.tagName.toLowerCase() === 'i' || el.tagName.toLowerCase() === 'span') {
+    if (tag === 'i' || tag === 'span') {
       const cls = el.getAttribute('class') || '';
       if (
         typeof cls === 'string' &&
@@ -1156,7 +1157,7 @@ export function extractSpeakerNotesFromElement(root) {
     // <template> stores its markup in a DocumentFragment on `.content`;
     // its own `.textContent` is empty. Fall back to `.textContent` for
     // every other element type.
-    const isTemplate = node.tagName && node.tagName.toLowerCase() === 'template';
+    const isTemplate = (node?.tagName || '').toLowerCase() === 'template';
     const raw = isTemplate && node.content ? node.content.textContent : node.textContent;
     if (!raw) continue;
     const trimmed = raw.trim();
@@ -1411,7 +1412,7 @@ export function collectTextParts(
         const segs = splitPreformattedText(child.nodeValue, whiteSpace, {
           isFirstChild: index === 0,
           isLastChild: index === node.childNodes.length - 1,
-          isPre: node.nodeType === 1 && node.tagName.toLowerCase() === 'pre',
+          isPre: node.nodeType === 1 && (node.tagName || '').toLowerCase() === 'pre',
           textTransform: wsStyle.textTransform,
         });
         if (segs.length) {
@@ -1420,8 +1421,12 @@ export function collectTextParts(
           if (baseOpts.charSpacing !== undefined && baseOpts.fontFace) {
             baseOpts.fontFace = `${baseOpts.fontFace}__spc_${Math.round(baseOpts.charSpacing * 100)}`;
           }
-          // Naked text node: don't paint the parent background as a text highlight.
-          delete baseOpts.highlight;
+          // Naked text node: don't paint the parent background as a text highlight if it's block-level.
+          const display = wsStyle.display || '';
+          const isBlock = ['block', 'flex', 'grid', 'table', 'list-item'].includes(String(display).toLowerCase());
+          if (isBlock) {
+            delete baseOpts.highlight;
+          }
           segs.forEach((seg) => {
             parts.push({
               text: seg.text,
@@ -1464,8 +1469,13 @@ export function collectTextParts(
 
         // BUG FIX: Avoid rendering the parent's background as a text highlight for naked text nodes.
         // The parent container's background is typically already rendered as a Shape Fill.
+        // Only delete the highlight if the parent display is block-level.
         if (child.nodeType === 3 && textOpts.highlight) {
-          delete textOpts.highlight;
+          const display = styleToUse.display || '';
+          const isBlock = ['block', 'flex', 'grid', 'table', 'list-item'].includes(String(display).toLowerCase());
+          if (isBlock) {
+            delete textOpts.highlight;
+          }
         }
 
         parts.push({
@@ -1474,7 +1484,7 @@ export function collectTextParts(
         });
       }
     } else if (child.nodeType === 1) {
-      if (child.tagName.toLowerCase() === 'br') {
+      if ((child?.tagName || '').toLowerCase() === 'br') {
         if (parts.length > 0) {
           const lastPart = parts[parts.length - 1];
           if (lastPart.text && typeof lastPart.text === 'string') {
@@ -1484,7 +1494,7 @@ export function collectTextParts(
         parts.push({ text: '', options: { breakLine: true } });
         trimNextLeading = true;
       } else {
-        const isBlock = ['div', 'p', 'li'].includes(child.tagName.toLowerCase());
+        const isBlock = ['div', 'p', 'li'].includes((child?.tagName || '').toLowerCase());
         if (isBlock && parts.length > 0 && !parts[parts.length - 1].options?.breakLine) {
           parts.push({ text: '', options: { breakLine: true } });
         }

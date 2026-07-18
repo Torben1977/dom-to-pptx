@@ -577,8 +577,9 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
 
           // 4. Adjust alignment for Icons to prevent baseline clipping
           // (Applies to <i>, <span>, or standard icon classes)
-          const tag = clonedNode.tagName;
-          if (tag === 'I' || tag === 'SPAN' || clonedNode.className.includes('fa-')) {
+          const tag = (clonedNode?.tagName || '').toLowerCase();
+          const className = typeof clonedNode.className === 'string' ? clonedNode.className : (clonedNode.className && clonedNode.className.baseVal) || '';
+          if (tag === 'i' || tag === 'span' || className.includes('fa-')) {
             // Flex center helps align the glyph exactly in the middle of the box
             // preventing top/bottom cropping due to line-height mismatches.
             clonedNode.style.display = 'inline-flex';
@@ -671,16 +672,16 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
  */
 function isIconElement(node) {
   // 1. Custom Elements (hyphenated tags) or Explicit Library Tags
-  const tag = node.tagName.toUpperCase();
+  const tag = (node?.tagName || '').toLowerCase();
   if (
     tag.includes('-') ||
-    ['MATERIAL-ICON', 'ICONIFY-ICON', 'REMIX-ICON', 'ION-ICON', 'EVA-ICON', 'BOX-ICON', 'FA-ICON'].includes(tag)
+    ['material-icon', 'iconify-icon', 'remix-icon', 'ion-icon', 'eva-icon', 'box-icon', 'fa-icon'].includes(tag)
   ) {
     return true;
   }
 
   // 2. Class-based Icons (FontAwesome, Bootstrap, Material symbols) on <i> or <span>
-  if (tag === 'I' || tag === 'SPAN') {
+  if (tag === 'i' || tag === 'span') {
     const cls = node.getAttribute('class') || '';
     if (
       typeof cls === 'string' &&
@@ -962,6 +963,18 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   if (node.nodeType !== 1) return null;
+
+  // If this element has an ancestor that is a text container,
+  // its text/content is already captured as part of that ancestor's text box.
+  // We should not render a separate shape/text box for it.
+  let ancestor = node.parentElement;
+  while (ancestor) {
+    if (isTextContainer(ancestor)) {
+      return null;
+    }
+    ancestor = ancestor.parentElement;
+  }
+
   const style = computedStyle; // Use pre-computed style
 
   const anim = parseAnimation(node, style);
@@ -1015,7 +1028,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     style.getPropertyValue('--shape-type') ||
     style.getPropertyValue('--pptx-shape');
 
-  if (node.tagName === 'TABLE') {
+  if ((node?.tagName || '').toLowerCase() === 'table') {
     const tableData = extractTableData(node, config.scale);
     const tableItems = [
       {
@@ -1070,9 +1083,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     };
   }
 
-  if ((node.tagName === 'UL' || node.tagName === 'OL') && !isComplexHierarchy(node)) {
+  const nodeTag = (node?.tagName || '').toLowerCase();
+  if ((nodeTag === 'ul' || nodeTag === 'ol') && !isComplexHierarchy(node)) {
     const listItems = [];
-    const liChildren = Array.from(node.children).filter((c) => c.tagName === 'LI');
+    const liChildren = Array.from(node.children).filter((c) => (c?.tagName || '').toLowerCase() === 'li');
 
     // --- Extract UL/OL container CSS for proper rendering ---
     const ulPaddingTop = parseFloat(style.paddingTop) || 0;
@@ -1097,7 +1111,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       let bullet;
       const listStyleType = liStyle.listStyleType || 'disc';
 
-      if (node.tagName === 'OL' || listStyleType === 'decimal') {
+      if (nodeTag === 'ol' || listStyleType === 'decimal') {
         bullet = { type: 'number' };
       } else if (listStyleType === 'none') {
         bullet = false;
@@ -1292,7 +1306,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     }
   }
 
-  if (node.tagName === 'CANVAS') {
+  if ((node?.tagName || '').toLowerCase() === 'canvas') {
     const item = {
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
@@ -1318,7 +1332,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   // --- ASYNC JOB: SVG Tags ---
-  if (node.nodeName.toUpperCase() === 'SVG') {
+  if ((node?.nodeName || '').toLowerCase() === 'svg') {
     const item = {
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
@@ -1337,7 +1351,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   // --- ASYNC JOB: IMG Tags ---
-  if (node.tagName === 'IMG') {
+  if ((node?.tagName || '').toLowerCase() === 'img') {
     let radii = {
       tl: parseFloat(style.borderTopLeftRadius) || 0,
       tr: parseFloat(style.borderTopRightRadius) || 0,
@@ -1477,7 +1491,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   const softEdge = getSoftEdges(style.filter, config.scale);
 
   let isImageWrapper = false;
-  const imgChild = Array.from(node.children).find((c) => c.tagName === 'IMG');
+  const imgChild = Array.from(node.children).find((c) => (c?.tagName || '').toLowerCase() === 'img');
   if (imgChild) {
     const childW = imgChild.offsetWidth || imgChild.getBoundingClientRect().width;
     const childH = imgChild.offsetHeight || imgChild.getBoundingClientRect().height;
@@ -1785,17 +1799,19 @@ function isComplexHierarchy(root) {
     const el = stack.pop();
 
     // 1. Layouts: Flex/Grid on LIs
-    if (el.tagName === 'LI') {
+    const elTag = (el?.tagName || '').toLowerCase();
+    // 1. Layouts: Flex/Grid on LIs
+    if (elTag === 'li') {
       const s = window.getComputedStyle(el);
       if (s.display === 'flex' || s.display === 'grid' || s.display === 'inline-flex') return true;
     }
 
     // 2. Media / Icons
-    if (['IMG', 'SVG', 'CANVAS', 'VIDEO', 'IFRAME'].includes(el.tagName)) return true;
+    if (['img', 'svg', 'canvas', 'video', 'iframe'].includes(elTag)) return true;
     if (isIconElement(el)) return true;
 
     // 3. Nested Lists (Flattening logic doesn't support nested bullets well yet)
-    if (el !== root && (el.tagName === 'UL' || el.tagName === 'OL')) return true;
+    if (el !== root && (elTag === 'ul' || elTag === 'ol')) return true;
 
     // Recurse, but don't go too deep if not needed
     for (let i = 0; i < el.children.length; i++) {
