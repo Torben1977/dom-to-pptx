@@ -38,9 +38,9 @@ await exportToPptx(Array.from(slides), {
 
 ## Command Line Interface (CLI)
 
-`dom-to-pptx` ships with a command-line interface suite offering both a unified entry point and specific commands for headless rendering and agent integration.
+`dom-to-pptx` ships with a command-line interface suite offering both a unified entry point and specific commands for headless rendering and agent integration. The unified router `dom-to-pptx` command is **preferred and recommended** over standalone commands.
 
-### 1. Unified Router (`dom-to-pptx`)
+### 1. Unified Router (`dom-to-pptx`) [RECOMMENDED]
 
 `dom-to-pptx` is the generic, unified command that delegates work to specific CLI subcommands.
 
@@ -55,9 +55,9 @@ npx dom-to-pptx skills
 npx dom-to-pptx export slides.html [options]
 ```
 
-### 2. Headless Exporter CLI (`dom-to-pptx-exporter`)
+### 2. Standalone Headless Exporter CLI (`dom-to-pptx-exporter`)
 
-`dom-to-pptx-exporter` is the specific command to headlessly render local HTML files or remote URLs into PowerPoint presentations. It uses Puppeteer to spin up a headless browser, injects the browser bundle if needed, traverses the DOM, and outputs the final `.pptx` file.
+`dom-to-pptx-exporter` is the standalone command to headlessly render local HTML files or remote URLs into PowerPoint presentations. It uses Puppeteer to spin up a headless browser, injects the browser bundle if needed, traverses the DOM, and outputs the final `.pptx` file.
 
 ```bash
 # Specific CLI usage:
@@ -67,7 +67,7 @@ npx dom-to-pptx-exporter <htmlFileOrUrl> [options]
 npx dom-to-pptx-exporter slides.html --output output.pptx -s ".slide"
 ```
 
-**Options:**
+**Options (applicable for both `dom-to-pptx export` and `dom-to-pptx-exporter`):**
 
 - `--output, -o <path>`: Set custom output path (defaults to same folder as input).
 - `--selector, -s <css>`: CSS selector for slide container elements (defaults to `.slide`).
@@ -77,9 +77,9 @@ npx dom-to-pptx-exporter slides.html --output output.pptx -s ".slide"
 - `--width <number>`: Set slide width in inches (default: `10`).
 - `--height <number>`: Set slide height in inches (default: `5.625`).
 
-### 3. AI Skills Installer CLI (`dom-to-pptx-skills`)
+### 3. Standalone AI Skills Installer CLI (`dom-to-pptx-skills`)
 
-`dom-to-pptx-skills` is the specific interactive installer that sets up AI presentation engineering skills in your environment. It auto-detects installed coding agents like Claude Code, Gemini CLI, Cursor, and Windsurf, and configures the latest optimized templates and directives for them.
+`dom-to-pptx-skills` is the specific standalone interactive installer that sets up AI presentation engineering skills in your environment. It auto-detects installed coding agents like Claude Code, Gemini CLI, Cursor, and Windsurf, and configures the latest optimized templates and directives for them.
 
 ```bash
 # Specific CLI usage:

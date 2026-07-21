@@ -22,6 +22,7 @@
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
+import JSZip from 'jszip';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -172,8 +173,8 @@ async function runExporter(argv) {
     pptxOptions: {
       ...(args.title && { title: args.title }),
       ...(args.author && { author: args.author }),
-      slideWidth,
-      slideHeight,
+      width: slideWidth,
+      height: slideHeight,
     },
   };
 
@@ -208,9 +209,40 @@ async function runExporter(argv) {
     process.stdout.write(`${c.dim}⏳  Launching headless browser...${c.reset}\n`);
     const buffer = await exportHtmlToPptx(htmlSource, exporterOptions);
 
+    let effectiveWidth = slideWidth;
+    let effectiveHeight = slideHeight;
+    try {
+      const zip = await JSZip.loadAsync(buffer);
+      const xmlStr = await zip.file('ppt/presentation.xml').async('string');
+      const sldSzMatch = xmlStr.match(/<[a-zA-Z0-9:]*sldSz\s+([^>]+)>/);
+      if (sldSzMatch) {
+        const attrs = sldSzMatch[1];
+        const cxMatch = attrs.match(/cx=["'](\d+)["']/);
+        const cyMatch = attrs.match(/cy=["'](\d+)["']/);
+        if (cxMatch && cyMatch) {
+          const cx = parseInt(cxMatch[1], 10);
+          const cy = parseInt(cyMatch[1], 10);
+          effectiveWidth = parseFloat((cx / 914400).toFixed(6));
+          effectiveHeight = parseFloat((cy / 914400).toFixed(6));
+        }
+      }
+    } catch (zipErr) {
+      console.warn(`${c.yellow}⚠️  Warning: Failed to parse generated PPTX to verify dimensions: ${zipErr.message}${c.reset}`);
+    }
+
     fs.writeFileSync(outputPath, buffer);
     console.log(`\n${c.green}${c.bold}✅  Export complete!${c.reset}`);
-    console.log(`   ${c.dim}Saved to:${c.reset} ${c.cyan}${outputPath}${c.reset}\n`);
+    console.log(`   ${c.dim}Saved to:${c.reset} ${c.cyan}${outputPath}${c.reset}`);
+    console.log(`   ${c.dim}Effective Slide Dimensions:${c.reset} ${c.yellow}${effectiveWidth}" x ${effectiveHeight}"${c.reset}`);
+
+    if (Math.abs(effectiveWidth - slideWidth) > 0.01 || Math.abs(effectiveHeight - slideHeight) > 0.01) {
+      console.warn(
+        `   ${c.yellow}⚠️  Warning: Requested dimensions (${slideWidth}" x ${slideHeight}") ` +
+        `differ from effective slide dimensions (${effectiveWidth}" x ${effectiveHeight}").${c.reset}\n`
+      );
+    } else {
+      console.log();
+    }
     process.exit(0);
   } catch (err) {
     console.error(`\n${c.red}❌  Export failed:${c.reset}`, err.message);

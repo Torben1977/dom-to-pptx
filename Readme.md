@@ -85,9 +85,11 @@ npm install dom-to-pptx
 
 ## 🖥️ Command Line Interface (CLI) & Agent Skills (New!)
 
-`dom-to-pptx` ships with a CLI suite to run headless PPTX exports or configure AI coding assistants:
+`dom-to-pptx` ships with a CLI suite to run headless PPTX exports or configure AI coding assistants.
 
-### 1. Unified CLI Router (`dom-to-pptx`)
+The unified router command `dom-to-pptx` is the **preferred and recommended** entry point for all operations.
+
+### 1. Unified CLI Router (`dom-to-pptx`) [RECOMMENDED]
 
 Run the unified command directly:
 
@@ -95,22 +97,22 @@ Run the unified command directly:
 # General help
 npx dom-to-pptx --help
 
-# Run headless exporter (delegates to dom-to-pptx-exporter)
+# Run headless exporter (preferred; delegates to dom-to-pptx-exporter)
 npx dom-to-pptx export slides.html [options]
 
 # Run interactive skills installer (delegates to dom-to-pptx-skills)
 npx dom-to-pptx skills
 ```
 
-### 2. Headless Exporter CLI (`dom-to-pptx-exporter`)
+### 2. Standalone Headless Exporter CLI (`dom-to-pptx-exporter`)
 
-A dedicated command to export local HTML files or remote URLs to PPTX files directly from the command line using a headless browser:
+A dedicated standalone command to export local HTML files or remote URLs to PPTX files directly from the command line using a headless browser:
 
 ```bash
 npx dom-to-pptx-exporter slides.html --output presentation.pptx
 ```
 
-**Options:**
+**Options (available for both `dom-to-pptx export` and `dom-to-pptx-exporter`):**
 
 - `--output, -o <path>`: Output `.pptx` file path (defaults to same folder as input).
 - `--selector, -s <css>`: CSS selector for slide container elements (defaults to `.slide`).
