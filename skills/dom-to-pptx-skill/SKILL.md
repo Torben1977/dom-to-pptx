@@ -60,6 +60,7 @@ Execute the HTML. Follow these **Non-Negotiable Directives**:
    - **Pathing**: In your HTML, use relative paths starting with `/images/` (e.g., `<img src="/images/hero_visual.png">`).
    - **Fallback**: If you cannot generate an image, use Pexels, Unsplash, URL from internet as a temporary placeholder, but local images are preferred for high-fidelity exports.
    - Images must have `object-fit: cover`.
+6. **Speaker Notes Requirement**: You can optionally add comprehensive presenter speaker notes to each `.slide` container using the `data-pptx-notes` attribute (e.g. `<div class="slide" data-pptx-notes="Welcome executives. Key focus: Q3 revenue growth and operational expansion.">`). These automatically export to PowerPoint presenter notes.
 
 ### PHASE 5: Pre-Export Validation
 
@@ -132,9 +133,10 @@ Refer to [DESIGN_PHILOSOPHY.md](reference/DESIGN_PHILOSOPHY.md) for the complete
   </head>
   <body style="margin: 0; background: #f0f0f0;">
     <div class="slide-stage">
-      <!-- Slide 1: Title (Fades in on slide entry) -->
+      <!-- Slide 1: Title (Fades in on slide entry, includes speaker notes) -->
       <div
         class="slide slide-transition-fade"
+        data-pptx-notes="Introduce presentation theme. Highlight key architectural capabilities and motion features."
         style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #0b0d19;"
       >
         <!-- Animated Title (Triggers on click) -->
