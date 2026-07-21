@@ -76,6 +76,7 @@ npx dom-to-pptx-exporter slides.html --output output.pptx -s ".slide"
 - `--author <text>`: Add slide presentation author metadata.
 - `--width <number>`: Set slide width in inches (default: `10`).
 - `--height <number>`: Set slide height in inches (default: `5.625`).
+- `--no-pseudo`: Disable exporting CSS pseudo-elements (::before/::after).
 
 ### 3. Standalone AI Skills Installer CLI (`dom-to-pptx-skills`)
 

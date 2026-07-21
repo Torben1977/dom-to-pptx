@@ -67,6 +67,7 @@ function printHelp() {
     ['--height       <num>', 'Slide height in inches (default: 5.625)'],
     ['--browser-width, --bw <num>', 'Viewport width in px (default: slide width * 192)'],
     ['--browser-height, --bh <num>', 'Viewport height in px (default: slide height * 192)'],
+    ['--no-pseudo', 'Disable exporting CSS pseudo-elements (::before/::after)'],
     ['--help,    -h', 'Show this help message'],
   ];
   opts.forEach(([flag, desc]) => {
@@ -95,6 +96,8 @@ function parseArgs(argv) {
       args.selector = argv[++i];
     } else if (a === '--inject') {
       args.inject = true;
+    } else if (a === '--no-pseudo') {
+      args.noPseudo = true;
     } else if (a === '--title' && argv[i + 1]) {
       args.title = argv[++i];
     } else if (a === '--author' && argv[i + 1]) {
@@ -175,6 +178,7 @@ async function runExporter(argv) {
       ...(args.author && { author: args.author }),
       width: slideWidth,
       height: slideHeight,
+      includePseudoElements: !args.noPseudo,
     },
   };
 

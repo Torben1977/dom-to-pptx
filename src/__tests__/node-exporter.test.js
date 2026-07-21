@@ -78,4 +78,74 @@ describe('getLaunchArgs', () => {
     expect(width).toBeCloseTo(13.333333, 4);
     expect(height).toBeCloseTo(7.5, 4);
   }, 30000);
+
+  it('exports pseudo-elements (linear-gradients and border triangles) correctly', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+      <style>
+      body { margin: 0; }
+      .slide {
+        width: 1920px;
+        height: 1080px;
+        position: relative;
+        background: #fff;
+      }
+      .card {
+        position: absolute;
+        left: 200px;
+        top: 200px;
+        width: 600px;
+        height: 300px;
+      }
+      .card::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 12px;
+        background: linear-gradient(90deg, #00479d, #1871c5);
+      }
+      .arrow {
+        position: absolute;
+        left: 950px;
+        top: 350px;
+        width: 180px;
+        height: 6px;
+      }
+      .arrow::after {
+        content: "";
+        position: absolute;
+        right: -1px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 0;
+        height: 0;
+        border-left: 30px solid #ed6f18;
+        border-top: 20px solid transparent;
+        border-bottom: 20px solid transparent;
+      }
+      </style>
+      </head>
+      <body>
+        <div class="slide">
+          <div class="card"></div>
+          <div class="arrow"></div>
+        </div>
+      </body>
+      </html>
+    `;
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: {
+        includePseudoElements: true,
+      },
+    });
+
+    const zip = await JSZip.loadAsync(buffer);
+    const mediaFiles = Object.keys(zip.files).filter(k => k.startsWith('ppt/media/'));
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(2);
+  }, 40000);
 });

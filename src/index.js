@@ -667,6 +667,79 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
 }
 
 /**
+ * Optimized html2canvas capture specifically for pseudo-elements (::before / ::after).
+ * Hides host element background, borders, text, and children in onclone, leaving ONLY
+ * the target pseudo-element visible. Works for ANY complex CSS shape (triangles, parallelograms,
+ * hexagons, clip-paths, ribbons, speech bubbles, etc.).
+ */
+async function capturePseudoElementCanvas(node, pseudoType, widthPx, heightPx) {
+  return new Promise((resolve) => {
+    const originalId = node.id;
+    const tempId = 'pptx-pseudo-' + Math.random().toString(36).substr(2, 9);
+    node.id = tempId;
+
+    const width = Math.max(Math.ceil(widthPx), 1);
+    const height = Math.max(Math.ceil(heightPx), 1);
+    const padding = 10;
+
+    html2canvas(node, {
+      backgroundColor: null,
+      logging: false,
+      scale: 3,
+      useCORS: true,
+      width: width + padding * 2,
+      height: height + padding * 2,
+      x: -padding,
+      y: -padding,
+      onclone: (clonedDoc) => {
+        const clonedNode = clonedDoc.getElementById(tempId);
+        if (clonedNode) {
+          clonedNode.style.setProperty('background', 'none', 'important');
+          clonedNode.style.setProperty('background-color', 'transparent', 'important');
+          clonedNode.style.setProperty('border', 'none', 'important');
+          clonedNode.style.setProperty('box-shadow', 'none', 'important');
+          clonedNode.style.setProperty('outline', 'none', 'important');
+          clonedNode.style.setProperty('color', 'transparent', 'important');
+
+          Array.from(clonedNode.children).forEach((child) => {
+            child.style.setProperty('display', 'none', 'important');
+          });
+
+          const otherPseudo = pseudoType === '::before' ? '::after' : '::before';
+          const styleEl = clonedDoc.createElement('style');
+          styleEl.textContent = `#${tempId}${otherPseudo} { display: none !important; }`;
+          clonedDoc.head.appendChild(styleEl);
+        }
+      },
+    })
+      .then((canvas) => {
+        if (originalId) node.id = originalId;
+        else node.removeAttribute('id');
+
+        const destCanvas = document.createElement('canvas');
+        destCanvas.width = width;
+        destCanvas.height = height;
+        const ctx = destCanvas.getContext('2d');
+
+        const scale = 3;
+        const sX = padding * scale;
+        const sY = padding * scale;
+        const sW = width * scale;
+        const sH = height * scale;
+
+        ctx.drawImage(canvas, sX, sY, sW, sH, 0, 0, width, height);
+        resolve(destCanvas.toDataURL('image/png'));
+      })
+      .catch((e) => {
+        if (originalId) node.id = originalId;
+        else node.removeAttribute('id');
+        console.warn('Canvas pseudo-element capture failed:', e);
+        resolve(null);
+      });
+  });
+}
+
+/**
  * Helper to identify elements that should be rendered as icons (Images).
  * Detects Custom Elements AND generic tags (<i>, <span>) with icon classes/pseudo-elements.
  */
@@ -705,14 +778,71 @@ function isIconElement(node) {
   return false;
 }
 
+function getNodeSelector(node) {
+  if (!node) return 'unknown';
+  if (node.id) return `#${node.id}`;
+  if (node.className) {
+    const classes = Array.from(node.classList).join('.');
+    return `${node.tagName.toLowerCase()}.${classes}`;
+  }
+  return node.tagName.toLowerCase();
+}
+
+function generateBorderTriangleSVG(w, h, borderLeft, borderTop, styles) {
+  const topColor = parseColor(styles.borderTopColor);
+  const rightColor = parseColor(styles.borderRightColor);
+  const bottomColor = parseColor(styles.borderBottomColor);
+  const leftColor = parseColor(styles.borderLeftColor);
+
+  let polygons = '';
+
+  if (topColor.hex && topColor.opacity > 0 && parseFloat(styles.borderTopWidth) > 0) {
+    polygons += `<polygon points="0,0 ${w},0 ${borderLeft},${borderTop}" fill="#${topColor.hex}" fill-opacity="${topColor.opacity}" />`;
+  }
+  if (rightColor.hex && rightColor.opacity > 0 && parseFloat(styles.borderRightWidth) > 0) {
+    polygons += `<polygon points="${w},0 ${w},${h} ${borderLeft},${borderTop}" fill="#${rightColor.hex}" fill-opacity="${rightColor.opacity}" />`;
+  }
+  if (bottomColor.hex && bottomColor.opacity > 0 && parseFloat(styles.borderBottomWidth) > 0) {
+    polygons += `<polygon points="0,${h} ${w},${h} ${borderLeft},${borderTop}" fill="#${bottomColor.hex}" fill-opacity="${bottomColor.opacity}" />`;
+  }
+  if (leftColor.hex && leftColor.opacity > 0 && parseFloat(styles.borderLeftWidth) > 0) {
+    polygons += `<polygon points="0,0 0,${h} ${borderLeft},${borderTop}" fill="#${leftColor.hex}" fill-opacity="${leftColor.opacity}" />`;
+  }
+
+  if (!polygons) return null;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+${polygons}
+</svg>`;
+  return 'data:image/svg+xml;base64,' + btoa(svg.trim());
+}
+
 /**
  * Replaces createRenderItem.
  * Returns { items: [], job: () => Promise, stopRecursion: boolean }
  */
 function getPseudoElementRect(hostRect, pseudoStyle) {
-  const w = parseFloat(pseudoStyle.width) || 0;
-  const h = parseFloat(pseudoStyle.height) || 0;
-  if (w <= 0 || h <= 0) return null;
+  let w = parseFloat(pseudoStyle.width) || 0;
+  let h = parseFloat(pseudoStyle.height) || 0;
+
+  const borderLeft = parseFloat(pseudoStyle.borderLeftWidth) || 0;
+  const borderRight = parseFloat(pseudoStyle.borderRightWidth) || 0;
+  const borderTop = parseFloat(pseudoStyle.borderTopWidth) || 0;
+  const borderBottom = parseFloat(pseudoStyle.borderBottomWidth) || 0;
+
+  const isTriangle = (w === 0 && h === 0) && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
+  if (isTriangle) {
+    w = borderLeft + borderRight;
+    h = borderTop + borderBottom;
+  }
+
+  if (w <= 0 || h <= 0) {
+    const content = pseudoStyle.content;
+    const hasContent = content && content !== 'none' && content !== 'normal' && content !== '""';
+    if (!hasContent) return null;
+    w = w || hostRect.width;
+    h = h || hostRect.height;
+  }
 
   let x = hostRect.left;
   let y = hostRect.top;
@@ -794,7 +924,7 @@ function getPseudoElementRect(hostRect, pseudoStyle) {
   return { left: x, top: y, width: w, height: h };
 }
 
-function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, domOrder, pptx) {
+function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, domOrder, pptx, globalOptions = {}) {
   const pseudoStyle = window.getComputedStyle(node, pseudoType);
   const content = pseudoStyle.content;
   const hasContent = content && content !== 'none' && content !== 'normal' && content !== '""';
@@ -805,10 +935,30 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const borderWidth = parseFloat(pseudoStyle.borderWidth) || 0;
   const hasBorder = borderWidth > 0 && borderCol.opacity > 0;
 
-  if (!hasBg && !hasBorder && !hasContent) return null;
+  const bgImgStr = pseudoStyle.backgroundImage;
+  const hasGradient = bgImgStr && bgImgStr.includes('linear-gradient');
+
+  // Check for border triangle
+  let wPx = parseFloat(pseudoStyle.width) || 0;
+  let hPx = parseFloat(pseudoStyle.height) || 0;
+  const borderLeft = parseFloat(pseudoStyle.borderLeftWidth) || 0;
+  const borderRight = parseFloat(pseudoStyle.borderRightWidth) || 0;
+  const borderTop = parseFloat(pseudoStyle.borderTopWidth) || 0;
+  const borderBottom = parseFloat(pseudoStyle.borderBottomWidth) || 0;
+  const isTriangle = (wPx === 0 && hPx === 0) && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
+
+  const isDisplayNone = pseudoStyle.display === 'none';
+  const isVisible = !isDisplayNone && (hasContent || hasBg || hasBorder || hasGradient || isTriangle);
+
+  if (!isVisible) return null;
 
   const rect = getPseudoElementRect(hostRect, pseudoStyle);
-  if (!rect) return null;
+  if (!rect) {
+    if (isVisible) {
+      console.warn(`dom-to-pptx: Unsupported pseudo-element ${pseudoType} on ${getNodeSelector(node)} due to zero dimensions. Element dropped.`);
+    }
+    return null;
+  }
 
   const scale = config.scale;
   const w = rect.width * PX_TO_INCH * scale;
@@ -816,9 +966,66 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const x = config.offX + (rect.left - config.rootX) * PX_TO_INCH * scale;
   const y = config.offY + (rect.top - config.rootY) * PX_TO_INCH * scale;
 
+  const rotation = getRotation(pseudoStyle.transform);
+
+  // 1. Handle CSS Border Triangle
+  if (isTriangle) {
+    const triangleSvg = generateBorderTriangleSVG(rect.width, rect.height, borderLeft, borderTop, pseudoStyle);
+    if (triangleSvg) {
+      return {
+        item: {
+          type: 'image',
+          zIndex,
+          domOrder,
+          options: {
+            data: triangleSvg,
+            x,
+            y,
+            w,
+            h,
+            rotate: rotation,
+          },
+        },
+        job: null,
+      };
+    }
+  }
+
+  // 2. Handle background gradient
+  if (hasGradient) {
+    const borderRadius = parseFloat(pseudoStyle.borderRadius) || 0;
+    const gradientData = generateGradientSVG(
+      rect.width,
+      rect.height,
+      bgImgStr,
+      borderRadius,
+      hasBorder ? { color: borderCol.hex, width: borderWidth } : null
+    );
+
+    if (gradientData) {
+      return {
+        item: {
+          type: 'image',
+          zIndex,
+          domOrder,
+          options: {
+            data: gradientData,
+            x,
+            y,
+            w,
+            h,
+            rotate: rotation,
+          },
+        },
+        job: null,
+      };
+    }
+  }
+
   const borderRadius = parseFloat(pseudoStyle.borderRadius) || 0;
   const isCircle = borderRadius >= Math.min(rect.width, rect.height) / 2 - 1;
 
+  // 3. Handle Text / Icon
   if (hasContent) {
     const cleanText = content.replace(/^['"]|['"]$/g, '');
     const textOpts = getTextStyle(pseudoStyle, scale, false);
@@ -844,44 +1051,69 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
     }
 
     return {
-      type: 'text',
-      zIndex,
-      domOrder,
-      textParts: [
-        {
-          text: cleanText,
-          options: textOpts,
-        },
-      ],
-      options: textOptions,
+      item: {
+        type: 'text',
+        zIndex,
+        domOrder,
+        textParts: [
+          {
+            text: cleanText,
+            options: textOpts,
+          },
+        ],
+        options: textOptions,
+      },
+      job: null,
     };
   }
 
-  let shapeType = pptx.ShapeType.rect;
-  let shapeOpts = {
-    x,
-    y,
-    w,
-    h,
-    ...(hasBg && { fill: { color: bgColor.hex, transparency: (1 - bgColor.opacity) * 100 } }),
-    line: hasBorder ? { color: borderCol.hex, width: borderWidth * 0.75 * scale } : null,
-  };
+  // 4. Handle Standard Solid Shapes
+  if (hasBg || hasBorder) {
+    let shapeType = pptx.ShapeType.rect;
+    let shapeOpts = {
+      x,
+      y,
+      w,
+      h,
+      ...(hasBg && { fill: { color: bgColor.hex, transparency: (1 - bgColor.opacity) * 100 } }),
+      line: hasBorder ? { color: borderCol.hex, width: borderWidth * 0.75 * scale } : null,
+    };
 
-  if (isCircle) {
-    shapeType = pptx.ShapeType.ellipse;
-  } else if (borderRadius > 0) {
-    shapeType = pptx.ShapeType.roundRect;
-    let cappedRadiusPx = Math.min(borderRadius, Math.min(rect.width, rect.height) / 2);
-    shapeOpts.rectRadius = cappedRadiusPx * PX_TO_INCH * scale;
+    if (isCircle) {
+      shapeType = pptx.ShapeType.ellipse;
+    } else if (borderRadius > 0) {
+      shapeType = pptx.ShapeType.roundRect;
+      let cappedRadiusPx = Math.min(borderRadius, Math.min(rect.width, rect.height) / 2);
+      shapeOpts.rectRadius = cappedRadiusPx * PX_TO_INCH * scale;
+    }
+
+    return {
+      item: {
+        type: 'shape',
+        zIndex,
+        domOrder,
+        shapeType,
+        options: shapeOpts,
+      },
+      job: null,
+    };
   }
 
-  return {
-    type: 'shape',
+  // 5. Fallback for Complex CSS Shapes (parallelograms, hexagons, clip-paths, speech bubbles, etc.)
+  const canvasItem = {
+    type: 'image',
     zIndex,
     domOrder,
-    shapeType,
-    options: shapeOpts,
+    options: { x, y, w, h, rotate: rotation, data: null },
   };
+
+  const canvasJob = async () => {
+    const dataUrl = await capturePseudoElementCanvas(node, pseudoType, rect.width, rect.height);
+    if (dataUrl) canvasItem.options.data = dataUrl;
+    else canvasItem.skip = true;
+  };
+
+  return { item: canvasItem, job: canvasJob };
 }
 
 function countParagraphs(node, scale) {
@@ -1767,29 +1999,45 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     }
   }
 
-  const pseudoBefore = preparePseudoElementItem(
-    node,
-    '::before',
-    rect,
-    config,
-    parentSortKey.concat([-1000000]),
-    domOrder,
-    pptx
-  );
-  if (pseudoBefore) items.unshift(pseudoBefore);
+  const pseudoJobs = [];
 
-  const pseudoAfter = preparePseudoElementItem(
-    node,
-    '::after',
-    rect,
-    config,
-    parentSortKey.concat([0, Infinity]),
-    domOrder,
-    pptx
-  );
-  if (pseudoAfter) items.push(pseudoAfter);
+  if (globalOptions.includePseudoElements !== false) {
+    const pseudoBeforeRes = preparePseudoElementItem(
+      node,
+      '::before',
+      rect,
+      config,
+      parentSortKey.concat([-1000000]),
+      domOrder,
+      pptx,
+      globalOptions
+    );
+    if (pseudoBeforeRes?.item) items.unshift(pseudoBeforeRes.item);
+    if (pseudoBeforeRes?.job) pseudoJobs.push(pseudoBeforeRes.job);
 
-  return { items, job: bgJob, stopRecursion: !!textPayload };
+    const pseudoAfterRes = preparePseudoElementItem(
+      node,
+      '::after',
+      rect,
+      config,
+      parentSortKey.concat([0, Infinity]),
+      domOrder,
+      pptx,
+      globalOptions
+    );
+    if (pseudoAfterRes?.item) items.push(pseudoAfterRes.item);
+    if (pseudoAfterRes?.job) pseudoJobs.push(pseudoAfterRes.job);
+  }
+
+  const combinedJob =
+    bgJob || pseudoJobs.length > 0
+      ? async () => {
+          if (bgJob) await bgJob();
+          for (const j of pseudoJobs) await j();
+        }
+      : null;
+
+  return { items, job: combinedJob, stopRecursion: !!textPayload };
 }
 
 function isComplexHierarchy(root) {

@@ -80,6 +80,7 @@ Instead of requiring manual browser interactions or click buttons on the page, c
      ```
 2. **Customize Layout Options**:
    - You can pass custom size settings directly using CLI arguments (e.g., `--width 10 --height 5.625`) to override slide sizes.
+   - You can disable pseudo-element (`::before`/`::after`) compilation (e.g. to prevent hover state conflicts or icon collisions) by passing `--no-pseudo`.
    - Set metadata title and author flags (e.g., `--title "Q3 Review" --author "Principal Visual Director"`).
 3. **Execution**: Run the command directly in your environment and provide the output file to the user. You do not need to instruct the user to click any buttons.
 

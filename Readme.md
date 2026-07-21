@@ -119,6 +119,7 @@ npx dom-to-pptx-exporter slides.html --output presentation.pptx
 - `--inject`: Force-inject the local browser bundle (useful if the HTML doesn't bundle `dom-to-pptx`).
 - `--title <text>` / `--author <text>`: Add presentation title / author metadata.
 - `--width <num>` / `--height <num>`: Set custom slide dimensions in inches.
+- `--no-pseudo`: Disable exporting CSS pseudo-elements (useful for preventing hover/icon state conflicts).
 
 ### 3. Agent Skills Installer CLI (`dom-to-pptx-skills`)
 
