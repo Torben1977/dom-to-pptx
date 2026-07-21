@@ -24,7 +24,7 @@ ${c.cyan}| | | | | | | |\\/| |   | || | | | | |_) | |_) || |  ${c.reset}
 ${c.cyan}| |_| | |_| | |  | |   | || |_| | |  __/|  __/ | |  ${c.reset}
 ${c.cyan}|____/ \\___/|_|  |_|   |_| \\___/  |_|   |_|    |_|  ${c.reset}
 
-       ${c.bold}${c.green}C L I   v2.1.0${c.reset}   ${c.dim}— Unified Entry (Skills + Exporter)${c.reset}
+       ${c.bold}${c.green}C L I   v2.1.1${c.reset}   ${c.dim}— Unified Entry (Skills + Exporter)${c.reset}
        ${c.dim}--------------------------------------------------${c.reset}
 `);
   console.log(`${c.bold}Usage:${c.reset}`);

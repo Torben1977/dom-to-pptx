@@ -1,6 +1,6 @@
 {
   "name": "dom-to-pptx-skills",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "type": "module",
   "description": "Interactive CLI installer to configure dom-to-pptx presentation engineering skills for AI agents",
   "main": "bin/cli.js",

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1] - 2026-07-21
+
+### Fixed
+
+- **Default Font Auto-Embedding**: Fixed `autoEmbedFonts` option in `src/index.js` to evaluate `options.autoEmbedFonts !== false`, ensuring automatic font scanning and embedding runs by default as documented without needing manual configuration.
+- **Cross-Origin Stylesheet Font Scanning Fallback**: Fixed font auto-detection when Google Fonts or external stylesheets are included via HTML `<link rel="stylesheet">` tags missing `crossorigin="anonymous"`. Added asynchronous `fetch()` fallback scanning in `getAutoDetectedFonts` and `@font-face` CSS string parser in `src/utils.js` so custom web fonts embed into PPTX presentations reliably regardless of CORS markup restrictions.
+
 ## [2.1.0] - 2026-07-21
 
 ### Added

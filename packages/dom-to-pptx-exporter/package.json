@@ -1,6 +1,6 @@
 {
   "name": "dom-to-pptx-exporter",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "type": "module",
   "description": "Headless CLI tool to convert HTML/CSS/URLs to PPTX presentation files using Puppeteer and dom-to-pptx",
   "main": "bin/cli.js",
