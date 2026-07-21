@@ -206,6 +206,23 @@ Background images also require full URLs:
 
 <!-- ❌ Incorrect -->
 <div style="background: url('./bg.jpg') center/cover;"></div>
+
+---
+
+## Speaker Notes (`data-pptx-notes`)
+
+You can add presenter speaker notes to your slides by placing a `data-pptx-notes` attribute on the slide root element or any child element within the slide.
+
+### Usage Example
+
+```html
+<div class="slide" data-pptx-notes="Welcome board members. Focus on Q3 revenue growth and operational expansion.">
+  <h1>Q3 Executive Review</h1>
+  <p>Revenue grew 34% year-over-year.</p>
+</div>
+```
+
+When exported via API or CLI, `dom-to-pptx` automatically extracts `data-pptx-notes` and populates the PowerPoint presenter notes pane for each slide.
 ```
 
 ---

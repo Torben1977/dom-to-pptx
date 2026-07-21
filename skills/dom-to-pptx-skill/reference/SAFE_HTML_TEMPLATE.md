@@ -69,12 +69,15 @@ of CSS properties (see [STYLE_WHITELIST.md](STYLE_WHITELIST.md)). This template 
         classes (e.g. fade-in, slide-transition-fade). No custom @keyframes. Note: only slide element animations are previewed in-browser; slide-to-slide transitions are not previewed in-browser.
     8.  Fonts: px units only. Arial / Helvetica / Georgia / a CORS-loaded
         Google Font. No rem/em/vw on slide content.
+    9.  Speaker Notes: Optionally use data-pptx-notes="..." on .slide to automatically
+        populate presenter speaker notes in PowerPoint.
     ========================================================================
   -->
 
       <!-- ┌─ SLIDE 1 — Title (Fades in on slide entry) ──────────────────────┐ -->
       <div
         class="slide slide-transition-fade"
+        data-pptx-notes="Welcome executives. Key takeaways: Q3 growth, strategic roadmap, and operational milestones."
         style="
     width: 1920px; height: 1080px;
     position: relative; overflow: hidden;

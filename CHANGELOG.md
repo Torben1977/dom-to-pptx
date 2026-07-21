@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-07-21
+
+### Added
+
+- **Presentation Speaker Notes (`data-pptx-notes`)**: Added automatic extraction of presentation speaker notes from HTML elements carrying the `data-pptx-notes` attribute (or root slide containers). Speaker notes populate directly into generated PowerPoint slide notes (#58).
+- **Hybrid Pseudo-Element Engine (`::before` / `::after`)**: Implemented a hybrid pseudo-element engine in `src/index.js` that renders standard text/shapes/gradients as native PPTX items/SVG vectors, while capturing complex CSS shapes (`width: 0` border triangles, parallelograms, hexagons, clip-paths, speech bubbles, ribbons) using `html2canvas` for 100% pixel-perfect rendering (#60).
+- **Disable Pseudo-Element CLI Flag (`--no-pseudo`)**: Added a `--no-pseudo` CLI flag and `includePseudoElements` option (`default: true`) allowing users and AI coding assistants to disable pseudo-element processing to prevent hover state conflicts or icon collisions (#60).
+- **Custom Viewport Dimensions**: Added `--browser-width` (`--bw`) and `--browser-height` (`--bh`) CLI flags to customize headless Puppeteer viewport resolution during export.
+
+### Fixed
+
+- **Custom Slide Dimensions in Exporter CLI**: Resolved an issue where custom `--width` and `--height` CLI parameters were ignored by the PPTX engine. Added automated XML package verification (`ppt/presentation.xml`) and logged effective slide size in CLI completion output (#61).
+- **Font Embed Hardening**: Hardened automatic font embedding (`autoEmbedFonts`) against `@import` directives, CORS restrictions, silent network failures, and font variant slot collisions (#57).
+- **Headless Exporter File Access**: Enabled `--allow-file-access-from-files` by default in the Puppeteer launcher to allow seamless local `.ttf` and `.woff2` font embedding without CORS errors (#55).
+- **Inline SVG Preservation**: Fixed inline SVG element rendering inside text containers and resolved an `SVGAnimatedString` `className` crash (#59).
+- **Inline Badge Highlights & Animation Timing**: Resolved highlight loss on inline badge elements and fixed missing build list entries for non-textbox shapes in animation timing blocks (#59).
+
 ## [2.0.3] - 2026-07-05
 
 ### Fixed

@@ -1,6 +1,6 @@
 # dom-to-pptx
 
-**The High-Fidelity HTML to PowerPoint Converter (v2.0.3)**
+**The High-Fidelity HTML to PowerPoint Converter (v2.1.0)**
 
 [![npm version](https://img.shields.io/npm/v/dom-to-pptx.svg?style=flat-square)](https://www.npmjs.com/package/dom-to-pptx)
 [![npm downloads](https://img.shields.io/npm/dm/dom-to-pptx.svg?style=flat-square)](https://www.npmjs.com/package/dom-to-pptx)
@@ -22,19 +22,18 @@ Most HTML-to-PPTX libraries fail when faced with modern web design. They break o
 
 **dom-to-pptx** is different. It is a **Coordinate Scraper & Style Engine** that traverses your DOM, calculates the exact computed styles of every element (Flexbox/Grid positions, complex gradients, shadows), and mathematically maps them to native PowerPoint shapes and text boxes. The result is a fully editable, vector-sharp presentation that looks exactly like your web view and as of v2.0.0, one that moves like a real motion-designed deck too.
 
-## 🎬 What's New in v2
+## 🎬 What's New in v2.1
 
-This is the biggest release yet, bringing native motion to your exports:
-
-- **20+ Element Animations**: Entrance and exit animations — including `fade-in`, `zoom-in`, `fly-in`, and `wipe-in` with directional variants (e.g. `to-up`) — applied directly as CSS classes and baked into real PowerPoint animation effects on export.
-- **70+ Slide Transitions**: A full library of slide-to-slide transitions, from subtle corporate styles (`slide-transition-fade`, `slide-transition-push`, `slide-transition-wipe`) to expressive creative styles (gallery, doors, zoom, bounce, and more).
-- **Animation Timing & Sequencing Controls**: Fine-grained `animate-duration-[MS]` and `animate-delay-[MS]` utility classes, plus trigger classes (`animate-trigger-on-click`, `animate-trigger-with`, `animate-trigger-after`) to choreograph click-driven or sequential builds.
-- **Creative Text Builds**: Character-by-character typing effects (`letter` class) and row-by-row bullet reveals (`paragraph` class).
-- **Browser Preview Support**: New `animations.css` stylesheet and a `domToPptx.applyBrowserAnimations()` helper to preview element animations in-browser before export (note: slide-to-slide transitions are not previewed in-browser, only element animations are, though both export correctly).
-
-See [Animations & Transitions](#-animations--transitions-new-in-v200) below for full usage details.
+- **Presentation Speaker Notes (`data-pptx-notes`)**: Annotate elements or slide roots with `data-pptx-notes="..."` to automatically generate presenter speaker notes in PowerPoint slides.
+- **Hybrid Pseudo-Element Engine (`::before` / `::after`)**: Full support for CSS pseudo-element decorations, including `linear-gradient` backgrounds, zero-size border triangles, clip-paths, and complex CSS shapes via `html2canvas` capture, plus `--no-pseudo` CLI opt-out.
+- **Custom Viewport & Dimensions**: Full support for `--width` / `--height` custom slide dimensions and `--browser-width` / `--browser-height` headless viewport resolution.
+- **Smart Font Embedding & File Access**: Hardened font embedder with `--allow-file-access-from-files` enabled by default for headless CLI exports.
 
 ## Features
+
+### 📝 Presentation Speaker Notes (v2.1)
+
+- **Slide Notes Extraction:** Add `data-pptx-notes="Presenter notes go here..."` to any slide root or nested element. `dom-to-pptx` automatically extracts and populates PowerPoint speaker notes for each slide.
 
 ### 🎬 Animations & Transitions (New in v2)
 
@@ -51,6 +50,7 @@ See [Animations & Transitions](#-animations--transitions-new-in-v200) below for 
 ### 🎨 Advanced Visual Fidelity
 
 - **Complex Gradients:** Includes a built-in CSS Gradient Parser that converts `linear-gradient` strings (with multiple stops, specific angles like `45deg`, and transparency) into vector SVGs.
+- **Hybrid Pseudo-Element Engine:** Renders `::before` and `::after` pseudo-elements — supporting gradient strips, border shapes, triangles, speech bubbles, and ribbons natively or via canvas snapshots.
 - **Mathematically Accurate Shadows:** Converts CSS Cartesian shadows (`x`, `y`, `blur`) into PowerPoint's Polar coordinate system (`angle`, `distance`) for 1:1 depth matching.
 - **Anti-Halo Image Processing:** Uses off-screen HTML5 Canvas with `source-in` composite masking to render rounded images without the ugly white "halo" artifacts found in other libraries.
 - **Soft Edges/Blurs:** Accurately translates CSS `filter: blur()` into PowerPoint's soft-edge effects, preserving visual depth.
