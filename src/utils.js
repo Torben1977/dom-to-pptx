@@ -1185,7 +1185,53 @@ export function extractSpeakerNotesFromElement(root) {
  * @param {ArrayLike<CSSStyleSheet>} styleSheets
  * @returns {Array<{name: string, url: string, weight: string, style: string}>}
  */
-export function getFontsFromStyleSheets(usedFamilies, styleSheets) {
+/**
+ * Parses @font-face declarations from raw CSS text string.
+ * Used as a fallback when document.styleSheets[i].cssRules is blocked by CORS.
+ */
+export function parseFontFacesFromCssText(cssText, usedFamilies) {
+  const foundFonts = [];
+  const processedUrls = new Set();
+
+  const fontFaceRegex = /@font-face\s*\{([^}]+)\}/gi;
+  let match;
+  while ((match = fontFaceRegex.exec(cssText)) !== null) {
+    const block = match[1];
+    const familyMatch = /font-family\s*:\s*['"]?([^;'"]+)['"]?/i.exec(block);
+    if (!familyMatch) continue;
+    const familyName = familyMatch[1].trim();
+
+    let matchedFamily = null;
+    if (usedFamilies.has(familyName)) {
+      matchedFamily = familyName;
+    } else {
+      for (const fam of usedFamilies) {
+        if (fam.toLowerCase() === familyName.toLowerCase()) {
+          matchedFamily = fam;
+          break;
+        }
+      }
+    }
+    if (!matchedFamily) continue;
+
+    const srcMatch = /src\s*:\s*([^;]+)/i.exec(block);
+    if (!srcMatch) continue;
+
+    const url = extractFontUrl(srcMatch[1]);
+    if (url && !processedUrls.has(url)) {
+      processedUrls.add(url);
+      const weightMatch = /font-weight\s*:\s*([^;]+)/i.exec(block);
+      const styleMatch = /font-style\s*:\s*([^;]+)/i.exec(block);
+      const weight = weightMatch ? weightMatch[1].trim() : '400';
+      const fontStyle = styleMatch ? styleMatch[1].trim().toLowerCase() : 'normal';
+
+      foundFonts.push({ name: matchedFamily, url, weight, style: fontStyle });
+    }
+  }
+  return foundFonts;
+}
+
+export function getFontsFromStyleSheets(usedFamilies, styleSheets, blockedHrefs = null) {
   const foundFonts = [];
   const processedUrls = new Set();
   const visitedSheets = new Set(); // Guard against cyclic @import graphs.
@@ -1199,7 +1245,10 @@ export function getFontsFromStyleSheets(usedFamilies, styleSheets) {
       rules = sheet.cssRules || sheet.rules;
     } catch (e) {
       // SecurityError is common for cross-origin sheets (Google Fonts etc.);
-      // we cannot scan those via CSSOM.
+      // record sheet.href for asynchronous fetch fallback.
+      if (sheet.href && blockedHrefs) {
+        blockedHrefs.add(sheet.href);
+      }
       console.warn('Cannot scan stylesheet for fonts (CORS restriction):', sheet.href, e && e.message);
       return;
     }
@@ -1235,7 +1284,7 @@ export function getFontsFromStyleSheets(usedFamilies, styleSheets) {
     }
   };
 
-  for (const sheet of Array.from(styleSheets)) {
+  for (const sheet of Array.from(styleSheets || [])) {
     walk(sheet);
   }
 
@@ -1243,15 +1292,51 @@ export function getFontsFromStyleSheets(usedFamilies, styleSheets) {
 }
 
 /**
- * Scans document.styleSheets to find @font-face URLs for the requested
+ * Scans document.styleSheets and document links to find @font-face URLs for the requested
  * families. Returns an array of { name, url, weight, style } objects.
- *
- * Thin wrapper around getFontsFromStyleSheets that reads the ambient
- * document.styleSheets. Kept async for backward compatibility with the
- * previous signature, though the body is now synchronous.
+ * Includes asynchronous fetch fallback for cross-origin stylesheets (e.g. Google Fonts
+ * included without crossorigin="anonymous").
  */
 export async function getAutoDetectedFonts(usedFamilies) {
-  return getFontsFromStyleSheets(usedFamilies, document.styleSheets);
+  const blockedHrefs = new Set();
+  const fontEntries = getFontsFromStyleSheets(usedFamilies, document.styleSheets, blockedHrefs);
+
+  if (typeof document !== 'undefined') {
+    const links = document.querySelectorAll('link[rel="stylesheet"]');
+    links.forEach((link) => {
+      if (link.href && (link.href.includes('fonts.googleapis.com') || link.href.includes('fonts.gstatic.com'))) {
+        blockedHrefs.add(link.href);
+      }
+    });
+  }
+
+  if (blockedHrefs.size > 0 && typeof fetch !== 'undefined') {
+    const fetchPromises = Array.from(blockedHrefs).map(async (href) => {
+      try {
+        const res = await fetch(href);
+        if (!res.ok) return [];
+        const cssText = await res.text();
+        return parseFontFacesFromCssText(cssText, usedFamilies);
+      } catch (e) {
+        console.warn('Failed to fetch cross-origin stylesheet fallback for fonts:', href, e);
+        return [];
+      }
+    });
+
+    const fetchedFontLists = await Promise.all(fetchPromises);
+    const existingUrls = new Set(fontEntries.map((f) => f.url));
+
+    for (const fontList of fetchedFontLists) {
+      for (const f of fontList) {
+        if (!existingUrls.has(f.url)) {
+          existingUrls.add(f.url);
+          fontEntries.push(f);
+        }
+      }
+    }
+  }
+
+  return fontEntries;
 }
 
 /**

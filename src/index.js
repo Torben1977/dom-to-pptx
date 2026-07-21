@@ -189,7 +189,7 @@ export async function exportToPptx(target, options = {}) {
     }
   }
 
-  if (options.autoEmbedFonts) {
+  if (options.autoEmbedFonts !== false) {
     // A. Scan DOM for used font families
     const usedFamilies = getUsedFontFamilies(elements);
 
