@@ -67,6 +67,32 @@ describe('getFontsFromStyleSheets', () => {
     expect(found[0].url).toBe('fonts/Inter-Regular.ttf');
   });
 
+  it('resolves relative src URLs against the stylesheet href, not the document base', () => {
+    // Fixture: an external stylesheet at /assets/deck.css declares
+    // src: url('fonts/Inter-Regular.ttf'). The browser resolves that URL
+    // relative to the stylesheet when rendering, but fetch() during embedding
+    // resolves it against the document — so without href-based resolution the
+    // font 404s and auto-embed silently falls back to a system font.
+    const sheet = makeSheet([
+      fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' }),
+    ]);
+    sheet.href = 'https://example.com/assets/deck.css';
+
+    const found = getFontsFromStyleSheets(new Set(['Inter']), [sheet]);
+    expect(found).toHaveLength(1);
+    expect(found[0].url).toBe('https://example.com/assets/fonts/Inter-Regular.ttf');
+  });
+
+  it('leaves relative src URLs untouched for hrefless (inline <style>) sheets', () => {
+    const sheet = makeSheet([
+      fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' }),
+    ]);
+
+    const found = getFontsFromStyleSheets(new Set(['Inter']), [sheet]);
+    expect(found).toHaveLength(1);
+    expect(found[0].url).toBe('fonts/Inter-Regular.ttf');
+  });
+
   it('recurses into @import chains — the common `theme.css imports fonts.css` pattern', () => {
     // Fixture: `fonts.css` (imported) declares @font-face for Inter Regular + Bold.
     // `theme.css` (top-level) contains only an @import pointing at fonts.css.

@@ -1189,7 +1189,7 @@ export function extractSpeakerNotesFromElement(root) {
  * Parses @font-face declarations from raw CSS text string.
  * Used as a fallback when document.styleSheets[i].cssRules is blocked by CORS.
  */
-export function parseFontFacesFromCssText(cssText, usedFamilies) {
+export function parseFontFacesFromCssText(cssText, usedFamilies, baseHref) {
   const foundFonts = [];
   const processedUrls = new Set();
 
@@ -1217,7 +1217,16 @@ export function parseFontFacesFromCssText(cssText, usedFamilies) {
     const srcMatch = /src\s*:\s*([^;]+)/i.exec(block);
     if (!srcMatch) continue;
 
-    const url = extractFontUrl(srcMatch[1]);
+    let url = extractFontUrl(srcMatch[1]);
+    // Relative URLs in fetched CSS text are relative to the stylesheet href,
+    // not the document; resolve them when the caller provides the base.
+    if (url && baseHref) {
+      try {
+        url = new URL(url, baseHref).href;
+      } catch (e) {
+        // keep original url if it cannot be resolved
+      }
+    }
     if (url && !processedUrls.has(url)) {
       processedUrls.add(url);
       const weightMatch = /font-weight\s*:\s*([^;]+)/i.exec(block);
@@ -1269,7 +1278,25 @@ export function getFontsFromStyleSheets(usedFamilies, styleSheets, blockedHrefs 
         if (!usedFamilies.has(familyName)) continue;
 
         const src = rule.style.getPropertyValue('src');
-        const url = extractFontUrl(src);
+        let url = extractFontUrl(src);
+
+        // Browsers return @font-face src URLs exactly as written in the CSS.
+        // For external stylesheets (e.g. assets/deck.css declaring
+        // src: url('fonts/x.woff2')) those URLs are relative to the
+        // stylesheet, but a later fetch() resolves them against the document
+        // base — a silent embed failure and system-font fallback. Resolve
+        // against the owning stylesheet's href when it has one; hrefless
+        // (inline <style>) sheets already resolve correctly at fetch time.
+        if (url) {
+          const base = (rule.parentStyleSheet && rule.parentStyleSheet.href) || sheet.href;
+          if (base) {
+            try {
+              url = new URL(url, base).href;
+            } catch (e) {
+              // keep original url if it cannot be resolved
+            }
+          }
+        }
 
         if (url && !processedUrls.has(url)) {
           processedUrls.add(url);
@@ -1316,7 +1343,7 @@ export async function getAutoDetectedFonts(usedFamilies) {
         const res = await fetch(href);
         if (!res.ok) return [];
         const cssText = await res.text();
-        return parseFontFacesFromCssText(cssText, usedFamilies);
+        return parseFontFacesFromCssText(cssText, usedFamilies, href);
       } catch (e) {
         console.warn('Failed to fetch cross-origin stylesheet fallback for fonts:', href, e);
         return [];
