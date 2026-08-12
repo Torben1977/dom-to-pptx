@@ -1326,12 +1326,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const ulPaddingBottom = parseFloat(style.paddingBottom) || 0;
     const ulPaddingLeft = parseFloat(style.paddingLeft) || 0;
 
-    // Convert to inches for PPTX margin array: [top, right, bottom, left]
+    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
     const listMargin = [
-      ulPaddingTop * PX_TO_INCH * config.scale * 72,
+      ulPaddingLeft * PX_TO_INCH * config.scale * 72,
       ulPaddingRight * PX_TO_INCH * config.scale * 72,
       ulPaddingBottom * PX_TO_INCH * config.scale * 72,
-      ulPaddingLeft * PX_TO_INCH * config.scale * 72,
+      ulPaddingTop * PX_TO_INCH * config.scale * 72,
     ];
 
     liChildren.forEach((child, index) => {
@@ -1525,7 +1525,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           h,
           align: 'left',
           valign: 'top',
-          // Apply CSS padding as PPTX text box inset margin [top, right, bottom, left] in points
+          // CSS padding applied as PPTX text box insets, in points
           margin: listMargin,
           autoFit: true,
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
@@ -1770,11 +1770,13 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
 
       const padding = getPadding(style, config.scale);
+      // getPadding returns [top, right, bottom, left]; PptxGenJS consumes the margin
+      // array as [lIns, rIns, bIns, tIns], in points
       const margin = [
-        padding[3] * 72, // top
+        padding[3] * 72, // left
         padding[1] * 72, // right
         padding[2] * 72, // bottom
-        padding[0] * 72, // left
+        padding[0] * 72, // top
       ];
 
       textPayload = { text: textParts, align, valign, margin };
