@@ -90,4 +90,43 @@ describe('list text insets', () => {
       slide.remove();
     }
   });
+
+  it('preserves ordered-list start and explicit item values', async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ol');
+    list.start = 2;
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:400px;height:120px;color:#111;font-size:16px;' +
+        'line-height:25px;margin:0;padding:0 0 0 24px'
+    );
+    for (const [index, text] of ['First item', 'Second item', 'Third item'].entries()) {
+      const item = document.createElement('li');
+      item.setAttribute('style', 'font-size:16px;line-height:25px');
+      if (index === 1) item.value = 5;
+      item.textContent = text;
+      list.appendChild(item);
+    }
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 400, height: 120 });
+    Array.from(list.children).forEach((item, index) => {
+      item.getBoundingClientRect = () => rect({ left: 224, top: 200 + index * 25, width: 376, height: 25 });
+    });
+
+    try {
+      const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+      const zip = await JSZip.loadAsync(blob);
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      const doc = new DOMParser().parseFromString(xml, 'text/xml');
+      const autoNumbers = Array.from(doc.getElementsByTagName('a:buAutoNum'));
+
+      expect(autoNumbers).toHaveLength(3);
+      expect(autoNumbers.map((item) => item.getAttribute('startAt'))).toEqual(['2', '5', '6']);
+    } finally {
+      slide.remove();
+    }
+  });
 });
