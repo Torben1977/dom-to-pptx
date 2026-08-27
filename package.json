@@ -39,6 +39,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "npx rollup -c",
+    "prepare": "rollup -c",
     "lint": "eslint .",
     "format": "prettier --write .",
     "publish:all": "pnpm publish -r --no-git-checks"

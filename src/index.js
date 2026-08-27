@@ -1893,7 +1893,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         w,
         h,
         config.scale,
-        parentSortKey.concat([-500000]),
+        parentSortKey.concat([0, 0]),
         domOrder
       );
       items.push(...borderItems);
@@ -2002,7 +2002,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       if (borderSvgData) {
         items.push({
           type: 'image',
-          zIndex: parentSortKey.concat([-500000]),
+          zIndex: parentSortKey.concat([0, 0]),
           domOrder,
           options: { data: borderSvgData, x, y, w, h, rotate: rotation },
         });
