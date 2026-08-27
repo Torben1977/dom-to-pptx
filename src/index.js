@@ -1334,6 +1334,11 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const ulPaddingRight = parseFloat(style.paddingRight) || 0;
     const ulPaddingBottom = parseFloat(style.paddingBottom) || 0;
     const ulPaddingLeft = parseFloat(style.paddingLeft) || 0;
+    const orderedDirection = node.hasAttribute('reversed') ? -1 : 1;
+    const declaredStart = Number.parseInt(node.getAttribute('start') || '', 10);
+    let nextOrderedValue = Number.isFinite(declaredStart)
+      ? declaredStart
+      : (orderedDirection < 0 ? liChildren.length : 1);
 
     // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
     const listMargin = [
@@ -1354,6 +1359,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
 
       if (nodeTag === 'ol' || listStyleType === 'decimal') {
         bullet = { type: 'number' };
+        const explicitValue = Number.parseInt(child.getAttribute('value') || '', 10);
+        const itemValue = Number.isFinite(explicitValue) ? explicitValue : nextOrderedValue;
+        bullet.startAt = itemValue;
+        nextOrderedValue = itemValue + orderedDirection;
       } else if (listStyleType === 'none') {
         bullet = false;
       } else {
