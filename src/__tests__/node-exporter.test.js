@@ -205,7 +205,7 @@ describe('getLaunchArgs', () => {
       <style>
         body { margin: 0; }
         .slide { width: 1920px; height: 1080px; position: relative; background: #fff; }
-        .safe, .overflowing {
+        .safe, .near-boundary, .overflowing {
           position: absolute;
           left: 180px;
           overflow: hidden;
@@ -226,11 +226,19 @@ describe('getLaunchArgs', () => {
           padding: 24px;
           font: 700 32px/40px Arial;
         }
+        .near-boundary {
+          top: 360px;
+          width: 300px;
+          height: 100px;
+          font: 700 84px/100px Arial;
+          white-space: nowrap;
+        }
       </style>
       </head>
       <body>
         <div class="slide">
           <div class="safe">Browser-fit title<br>keeps its size<br><span style="font-size:16px;font-weight:400">with safe reserve</span></div>
+          <div class="near-boundary">Fit</div>
           <div class="overflowing">Browser-overflowing title with a second line</div>
         </div>
       </body>
@@ -250,6 +258,7 @@ describe('getLaunchArgs', () => {
     };
 
     expect(shapeFor('Browser-fit title')).not.toContain('<a:normAutofit');
+    expect(shapeFor('Fit')).not.toContain('<a:normAutofit');
     expect(shapeFor('Browser-overflowing title with a second line')).toContain('<a:normAutofit');
   }, 40000);
 
