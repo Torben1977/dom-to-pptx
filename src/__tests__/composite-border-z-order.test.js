@@ -71,4 +71,47 @@ describe('composite border z-order', () => {
       slide.remove();
     }
   });
+
+  it('renders asymmetric borders above a gradient background', async () => {
+    const slide = document.createElement('section');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background-color:#fff');
+
+    const matrix = document.createElement('div');
+    matrix.setAttribute(
+      'style',
+      'position:absolute;left:280px;top:270px;width:1130px;height:570px;' +
+        'background:linear-gradient(135deg,rgba(6,93,201,.05),rgba(9,110,102,.10));' +
+        'border-left:3px solid #0E1B2C;border-bottom:3px solid #0E1B2C'
+    );
+    slide.appendChild(matrix);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    matrix.getBoundingClientRect = () => rect({ left: 280, top: 270, width: 1130, height: 570 });
+
+    try {
+      const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+      const zip = await JSZip.loadAsync(blob);
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      const documentNode = new DOMParser().parseFromString(xml, 'text/xml');
+      const shapeTree = documentNode.getElementsByTagName('p:spTree')[0];
+      const drawingNodes = Array.from(shapeTree.children).filter((node) => ['p:sp', 'p:pic'].includes(node.tagName));
+      const gradientIndex = drawingNodes.findIndex((node) => node.tagName === 'p:pic');
+      const borderIndices = drawingNodes
+        .map((node, index) => ({ node, index }))
+        .filter(({ node }) => {
+          if (node.tagName !== 'p:sp' || node.getElementsByTagName('a:t').length > 0) return false;
+          return Array.from(node.getElementsByTagName('a:srgbClr')).some(
+            (color) => color.getAttribute('val') === '0E1B2C'
+          );
+        })
+        .map(({ index }) => index);
+
+      expect(gradientIndex).toBeGreaterThanOrEqual(0);
+      expect(borderIndices).toHaveLength(2);
+      expect(borderIndices.every((index) => index > gradientIndex)).toBe(true);
+    } finally {
+      slide.remove();
+    }
+  });
 });

@@ -1,6 +1,6 @@
 {
   "name": "dom-to-pptx",
-  "version": "2.1.1-orglith.5",
+  "version": "2.1.1-orglith.2",
   "type": "module",
   "description": "A client-side library that converts any HTML element into a fully editable PowerPoint slide. **dom-to-pptx** transforms DOM structures into pixel-accurate `.pptx` content, preserving gradients, shadows, rounded images, and responsive layouts. It translates CSS Flexbox/Grid, linear-gradients, box-shadows, and typography into native PowerPoint shapes, enabling precise, design-faithful slide generation directly from the browser.",
   "main": "dist/dom-to-pptx.cjs",
@@ -36,7 +36,9 @@
     "LICENSE"
   ],
   "scripts": {
+    "pretest": "npm run build",
     "test": "vitest run",
+    "test:office-roundtrip": "npm run build && node scripts/run-office-roundtrip.mjs",
     "test:watch": "vitest",
     "build": "npx rollup -c",
     "prepare": "rollup -c",

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.2] - 2026-08-27
+
+### Fixed
+
+- Fixed text fit for fixed slide geometry by emitting PowerPoint shrink-to-fit instead of shape-growth auto-fit.
+- Preserved browser text layout inside CSS ellipses by exporting an editable ellipse and an editable rectangular text overlay instead of using PowerPoint's narrower curved text region.
+- Restored asymmetric CSS borders on gradient-backed elements by emitting their border shapes into the PowerPoint render queue.
+- Added fail-closed font embedding for callers that require exact embedded font variants.
+- Preserved SVG-only visual Web Components with open Shadow Roots as vector pictures instead of dropping their rendered content.
+
 ## [2.1.1] - 2026-07-21
 
 ### Fixed
