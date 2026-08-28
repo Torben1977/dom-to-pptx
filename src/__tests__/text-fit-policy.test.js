@@ -34,7 +34,7 @@ beforeAll(() => {
 });
 
 describe('editable text fit policy', () => {
-  it('keeps the authored box geometry and asks PowerPoint to shrink only on overflow', async () => {
+  it('keeps browser-fitting text at its authored size instead of enabling PowerPoint autofit', async () => {
     const slide = document.createElement('div');
     slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
     const label = document.createElement('div');
@@ -57,6 +57,46 @@ describe('editable text fit policy', () => {
       const doc = new DOMParser().parseFromString(xml, 'text/xml');
       const shape = Array.from(doc.getElementsByTagName('p:sp')).find((candidate) =>
         Array.from(candidate.getElementsByTagName('a:t')).some((run) => run.textContent === 'Wirklogik')
+      );
+
+      expect(shape).toBeDefined();
+      const bodyPr = shape.getElementsByTagName('a:bodyPr')[0];
+      expect(bodyPr.getElementsByTagName('a:normAutofit')).toHaveLength(0);
+      expect(bodyPr.getElementsByTagName('a:spAutoFit')).toHaveLength(0);
+    } finally {
+      slide.remove();
+    }
+  });
+
+  it('enables PowerPoint shrink when the browser reports real text overflow', async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const label = document.createElement('div');
+    label.textContent = 'Ein Text, der im Browser nachweislich nicht in seine feste Box passt.';
+    label.setAttribute(
+      'style',
+      'position:absolute;left:80px;top:800px;width:170px;height:48px;padding:8px 12px;' +
+        'background:#0d1b2a;color:#fff;font-size:24px;overflow:hidden'
+    );
+    slide.appendChild(label);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    label.getBoundingClientRect = () => rect({ left: 80, top: 800, width: 170, height: 48 });
+    Object.defineProperties(label, {
+      clientWidth: { configurable: true, value: 170 },
+      clientHeight: { configurable: true, value: 48 },
+      scrollWidth: { configurable: true, value: 242 },
+      scrollHeight: { configurable: true, value: 96 },
+    });
+
+    try {
+      const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+      const zip = await JSZip.loadAsync(blob);
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      const doc = new DOMParser().parseFromString(xml, 'text/xml');
+      const shape = Array.from(doc.getElementsByTagName('p:sp')).find((candidate) =>
+        Array.from(candidate.getElementsByTagName('a:t')).some((run) => run.textContent.startsWith('Ein Text'))
       );
 
       expect(shape).toBeDefined();
@@ -153,7 +193,7 @@ describe('editable text fit policy', () => {
       );
       expect(ellipseShape).toBeDefined();
       const bodyPr = textShape.getElementsByTagName('a:bodyPr')[0];
-      expect(bodyPr.getElementsByTagName('a:normAutofit')).toHaveLength(1);
+      expect(bodyPr.getElementsByTagName('a:normAutofit')).toHaveLength(0);
       expect(bodyPr.getElementsByTagName('a:spAutoFit')).toHaveLength(0);
       expect(Number(bodyPr.getAttribute('lIns'))).toBeGreaterThan(0);
       expect(Number(bodyPr.getAttribute('rIns'))).toBeGreaterThan(0);

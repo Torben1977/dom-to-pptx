@@ -146,7 +146,7 @@ describe('getLaunchArgs', () => {
     });
 
     const zip = await JSZip.loadAsync(buffer);
-    const mediaFiles = Object.keys(zip.files).filter(k => k.startsWith('ppt/media/'));
+    const mediaFiles = Object.keys(zip.files).filter((k) => k.startsWith('ppt/media/'));
     expect(mediaFiles.length).toBeGreaterThanOrEqual(2);
   }, 40000);
 
@@ -179,18 +179,78 @@ describe('getLaunchArgs', () => {
     const zip = await JSZip.loadAsync(buffer);
     const xml = await zip.file('ppt/slides/slide1.xml').async('string');
     const titleIndex = xml.indexOf('<a:t>Verbindlicher Rahmen</a:t>');
-    const bodyIndex = xml.indexOf('<a:t>Gemeinsame Ergebnisse, Kapazität und Entscheidungen werden zur Voraussetzung.</a:t>');
+    const bodyIndex = xml.indexOf(
+      '<a:t>Gemeinsame Ergebnisse, Kapazität und Entscheidungen werden zur Voraussetzung.</a:t>'
+    );
     expect(titleIndex).toBeGreaterThan(-1);
     expect(bodyIndex).toBeGreaterThan(titleIndex);
 
     const shapeStart = xml.lastIndexOf('<p:sp>', titleIndex);
     const shapeEnd = xml.indexOf('</p:sp>', titleIndex);
     const textShape = xml.slice(shapeStart, shapeEnd);
-    expect(textShape).toContain('<a:t>Gemeinsame Ergebnisse, Kapazität und Entscheidungen werden zur Voraussetzung.</a:t>');
+    expect(textShape).toContain(
+      '<a:t>Gemeinsame Ergebnisse, Kapazität und Entscheidungen werden zur Voraussetzung.</a:t>'
+    );
 
     const widthMatch = textShape.match(/<a:ext cx="(\d+)"/);
     expect(widthMatch).not.toBeNull();
     expect(Number(widthMatch[1])).toBeGreaterThan(3_000_000);
+  }, 40000);
+
+  it('uses PowerPoint autofit only for browser-overflowing text boxes', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+      <style>
+        body { margin: 0; }
+        .slide { width: 1920px; height: 1080px; position: relative; background: #fff; }
+        .safe, .overflowing {
+          position: absolute;
+          left: 180px;
+          overflow: hidden;
+        }
+        .safe {
+          top: 180px;
+          width: 300px;
+          height: 130px;
+          padding: 27px 25px;
+          border-radius: 70px;
+          font: 700 22px/29px Arial;
+          text-align: center;
+        }
+        .overflowing {
+          top: 480px;
+          width: 420px;
+          height: 52px;
+          padding: 24px;
+          font: 700 32px/40px Arial;
+        }
+      </style>
+      </head>
+      <body>
+        <div class="slide">
+          <div class="safe">Browser-fit title<br>keeps its size<br><span style="font-size:16px;font-weight:400">with safe reserve</span></div>
+          <div class="overflowing">Browser-overflowing title with a second line</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5 },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+    const shapeFor = (text) => {
+      const textIndex = xml.indexOf(`<a:t>${text}</a:t>`);
+      expect(textIndex).toBeGreaterThan(-1);
+      return xml.slice(xml.lastIndexOf('<p:sp>', textIndex), xml.indexOf('</p:sp>', textIndex));
+    };
+
+    expect(shapeFor('Browser-fit title')).not.toContain('<a:normAutofit');
+    expect(shapeFor('Browser-overflowing title with a second line')).toContain('<a:normAutofit');
   }, 40000);
 
   it('keeps the representative OrgLith deck.html text-flow patterns together', async () => {
@@ -318,10 +378,7 @@ describe('getLaunchArgs', () => {
     expect(Array.from(metricShape.matchAll(/<a:t>(.*?)<\/a:t>/g), (match) => match[1]).join('')).toBe('€31%');
 
     const warningIndex = xml.indexOf('<a:t>Positioned warning</a:t>');
-    const warningShape = xml.slice(
-      xml.lastIndexOf('<p:sp>', warningIndex),
-      xml.indexOf('</p:sp>', warningIndex)
-    );
+    const warningShape = xml.slice(xml.lastIndexOf('<p:sp>', warningIndex), xml.indexOf('</p:sp>', warningIndex));
     expect(warningShape).not.toContain('<a:t>!</a:t>');
   }, 40000);
 });
