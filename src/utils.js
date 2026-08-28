@@ -476,7 +476,7 @@ export function generateCompositeBorderSVG(w, h, radius, sides) {
 /**
  * Generates an SVG data URL for a solid shape with non-uniform corner radii.
  */
-export function generateCustomShapeSVG(w, h, color, opacity, radii) {
+export function generateCustomShapeSVG(w, h, color, opacity, radii, border = null) {
   let { tl, tr, br, bl } = radii;
 
   // Clamp radii using CSS spec logic (avoid overlap)
@@ -494,22 +494,46 @@ export function generateCustomShapeSVG(w, h, color, opacity, radii) {
     bl *= factor;
   }
 
-  const path = `
-    M ${tl} 0
-    L ${w - tr} 0
-    A ${tr} ${tr} 0 0 1 ${w} ${tr}
-    L ${w} ${h - br}
-    A ${br} ${br} 0 0 1 ${w - br} ${h}
-    L ${bl} ${h}
-    A ${bl} ${bl} 0 0 1 0 ${h - bl}
-    L 0 ${tl}
-    A ${tl} ${tl} 0 0 1 ${tl} 0
+  const roundedPath = (inset, pathRadii) => {
+    const left = inset;
+    const top = inset;
+    const right = Math.max(left, w - inset);
+    const bottom = Math.max(top, h - inset);
+    const rtl = Math.max(0, pathRadii.tl);
+    const rtr = Math.max(0, pathRadii.tr);
+    const rbr = Math.max(0, pathRadii.br);
+    const rbl = Math.max(0, pathRadii.bl);
+    return `
+    M ${left + rtl} ${top}
+    L ${right - rtr} ${top}
+    A ${rtr} ${rtr} 0 0 1 ${right} ${top + rtr}
+    L ${right} ${bottom - rbr}
+    A ${rbr} ${rbr} 0 0 1 ${right - rbr} ${bottom}
+    L ${left + rbl} ${bottom}
+    A ${rbl} ${rbl} 0 0 1 ${left} ${bottom - rbl}
+    L ${left} ${top + rtl}
+    A ${rtl} ${rtl} 0 0 1 ${left + rtl} ${top}
     Z
   `;
+  };
+
+  const path = roundedPath(0, { tl, tr, br, bl });
+  let borderPath = '';
+  if (border?.color && border.width > 0) {
+    const inset = border.width / 2;
+    const strokePath = roundedPath(inset, {
+      tl: tl - inset,
+      tr: tr - inset,
+      br: br - inset,
+      bl: bl - inset,
+    });
+    borderPath = `<path d="${strokePath}" fill="none" stroke="#${border.color}" stroke-width="${border.width}" stroke-opacity="${border.opacity ?? 1}" />`;
+  }
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
       <path d="${path}" fill="#${color}" fill-opacity="${opacity}" />
+      ${borderPath}
     </svg>`;
 
   return 'data:image/svg+xml;base64,' + btoa(svg.trim());
