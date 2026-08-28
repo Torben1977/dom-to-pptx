@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.6] - 2026-08-29
+
+### Fixed
+
+- Preserved rotation and vertical writing-mode metadata when textual `::before` and `::after` pseudo-elements are emitted as editable PowerPoint text shapes.
+- Resolved scoped CSS `counter()` and `counters()` generated content in rendered DOM order instead of exporting counter expressions as literal text.
+- Shared resolved pseudo-content across standalone text shapes, inline rich text, lists, tables, paragraph counts, and animation metadata.
+- Excluded suppressed elements and non-generated pseudo-elements from CSS counter state.
+
 ## [2.1.1-orglith.2] - 2026-08-27
 
 ### Fixed
