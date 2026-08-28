@@ -38,6 +38,46 @@ beforeAll(() => {
   });
 });
 
+let emptyListDocumentPromise;
+
+function emptyListDocument() {
+  if (emptyListDocumentPromise) return emptyListDocumentPromise;
+
+  emptyListDocumentPromise = (async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:500px;height:80px;' +
+        'font-size:24px;line-height:32px;margin:0;padding:0 0 0 24px'
+    );
+    const item = document.createElement('li');
+    list.appendChild(item);
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 500, height: 80 });
+    item.getBoundingClientRect = () => rect({ left: 224, top: 200, width: 476, height: 32 });
+
+    try {
+      const blob = await exportToPptx(slide, {
+        skipDownload: true,
+        autoEmbedFonts: false,
+        skipNormalize: true,
+      });
+      const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      return new DOMParser().parseFromString(xml, 'text/xml');
+    } finally {
+      slide.remove();
+    }
+  })();
+
+  return emptyListDocumentPromise;
+}
+
 describe('list text insets', () => {
   it('maps each CSS padding edge of a <ul> to the matching PPTX inset', async () => {
     // Four distinct paddings, so a swapped pair cannot go unnoticed.
@@ -128,5 +168,61 @@ describe('list text insets', () => {
     } finally {
       slide.remove();
     }
+  });
+
+  it('emits one bullet definition for a rich-text list item', async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:500px;height:120px;' +
+        'font-size:24px;line-height:32px;margin:0;padding:0 0 0 24px'
+    );
+    list.innerHTML = '<li><strong>Bold lead</strong> normal continuation</li>';
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 500, height: 120 });
+    list.firstElementChild.getBoundingClientRect = () => rect({ left: 224, top: 200, width: 476, height: 32 });
+
+    try {
+      const blob = await exportToPptx(slide, {
+        skipDownload: true,
+        autoEmbedFonts: false,
+        skipNormalize: true,
+      });
+      const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      const doc = new DOMParser().parseFromString(xml, 'text/xml');
+      const listShape = Array.from(doc.getElementsByTagName('p:sp')).find((shape) =>
+        Array.from(shape.getElementsByTagName('a:t')).some((run) => run.textContent === 'Bold lead')
+      );
+
+      expect(listShape).toBeDefined();
+      expect(Array.from(listShape.getElementsByTagName('a:t')).map((run) => run.textContent)).toEqual([
+        'Bold lead',
+        ' normal continuation',
+      ]);
+      expect(listShape.getElementsByTagName('a:p')).toHaveLength(1);
+      expect(listShape.getElementsByTagName('a:buChar')).toHaveLength(1);
+    } finally {
+      slide.remove();
+    }
+  });
+
+  it('exports the empty-list boundary fixture as a valid slide', async () => {
+    const documentNode = await emptyListDocument();
+    expect(documentNode.getElementsByTagName('p:sld')).toHaveLength(1);
+    expect(documentNode.getElementsByTagName('p:spTree')).toHaveLength(1);
+  });
+
+  it.fails('preserves the browser-visible marker of an empty list item', async () => {
+    const documentNode = await emptyListDocument();
+    const bulletParagraphs = Array.from(documentNode.getElementsByTagName('a:p')).filter(
+      (paragraph) => paragraph.getElementsByTagName('a:buChar').length === 1
+    );
+    expect(bulletParagraphs).toHaveLength(1);
   });
 });

@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        color: #0e1b2c;
+      }
+      .slide {
+        width: 1920px;
+        height: 1080px;
+        position: relative;
+        overflow: hidden;
+        background: #ffffff;
+      }
+      .kicker {
+        position: absolute;
+        left: 88px;
+        top: 66px;
+        color: #096e66;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 2px;
+      }
+      .parallel {
+        position: absolute;
+        left: 88px;
+        top: 210px;
+        width: 1744px;
+        display: flex;
+        gap: 28px;
+      }
+      .parallel > div,
+      .option {
+        flex: 1;
+        min-height: 250px;
+        padding: 32px;
+        background: #eef4ee;
+        border-top: 10px solid #096e66;
+      }
+      .parallel > div:nth-child(2) {
+        background: #f3f6fb;
+        border-top-color: #1764d8;
+      }
+      .parallel > div:nth-child(3) {
+        background: #fff5e7;
+        border-top-color: #a85e00;
+      }
+      .parallel b,
+      .option b,
+      .open-copy b {
+        display: inline;
+        font-size: 31px;
+        line-height: 38px;
+        font-weight: 700;
+      }
+      .parallel p,
+      .option p,
+      .open-copy p {
+        display: block;
+        margin: 18px 0 0;
+        font-size: 24px;
+        line-height: 32px;
+        color: #4b5563;
+      }
+      .options {
+        position: absolute;
+        left: 88px;
+        top: 250px;
+        width: 840px;
+        display: flex;
+        gap: 20px;
+      }
+      .option {
+        min-height: 220px;
+        padding: 30px;
+        border-top-width: 8px;
+      }
+      .option:first-child {
+        background: #f3f6fb;
+        border-top-color: #c8d0da;
+      }
+      .option:last-child {
+        background: #eef8f0;
+        border-top-color: #096e66;
+      }
+      .open-list {
+        position: absolute;
+        left: 88px;
+        top: 220px;
+        width: 920px;
+      }
+      .openrow {
+        display: flex;
+        align-items: flex-start;
+        min-height: 120px;
+        padding: 18px 0;
+        border-bottom: 1px solid #cbd5e1;
+      }
+      .marker {
+        width: 80px;
+        color: #f24726;
+        font-size: 42px;
+        font-weight: 700;
+      }
+      .open-copy {
+        width: 820px;
+      }
+      .metrics {
+        position: absolute;
+        left: 88px;
+        top: 250px;
+        display: flex;
+        gap: 90px;
+      }
+      .metric {
+        width: 360px;
+      }
+      .metric .value {
+        color: #0e1b2c;
+        font-size: 66px;
+        line-height: 72px;
+        font-weight: 700;
+      }
+      .metric .unit {
+        color: #0e1b2c;
+        font-size: 42px;
+        line-height: 48px;
+        font-weight: 700;
+      }
+      .metric .label {
+        margin-top: 16px;
+        color: #4b5563;
+        font-size: 24px;
+        line-height: 30px;
+      }
+      .heading-flow {
+        position: absolute;
+        left: 88px;
+        top: 200px;
+        width: 720px;
+        padding: 38px;
+        background: #f3f6fb;
+      }
+      .heading-flow h3 {
+        margin: 0;
+        font-size: 36px;
+        line-height: 42px;
+      }
+      .heading-flow h4 {
+        margin: 14px 0 0;
+        font-size: 28px;
+        line-height: 34px;
+        color: #1764d8;
+      }
+      .heading-flow p {
+        margin: 18px 0 0;
+        font-size: 24px;
+        line-height: 32px;
+      }
+      .mixed-align {
+        position: absolute;
+        left: 920px;
+        top: 200px;
+        width: 720px;
+        padding: 38px;
+        background: #eef8f0;
+        text-align: left;
+      }
+      .mixed-align b {
+        display: inline;
+        font-size: 34px;
+        line-height: 40px;
+        text-align: left;
+      }
+      .mixed-align p {
+        margin: 18px 0 0;
+        font-size: 24px;
+        line-height: 32px;
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Representative fragments of OrgLith's static deck.html: cards, comparison options, and open-point rows. -->
+    <section class="slide" data-slide-id="text-flow-cards">
+      <div class="kicker">02 · STEUERUNGSLOGIK</div>
+      <div class="parallel">
+        <div>
+          <b>Gemeinsam messen</b>
+          <p>Durchlaufzeit und Rückfragen als Ergebnisgrößen.</p>
+        </div>
+        <div>
+          <b>Gemeinsam befähigen</b>
+          <p>Gebundene Kapazität bleibt verfügbar.</p>
+        </div>
+        <div>
+          <b>Nach 6 Monaten prüfen</b>
+          <p>Die Ergebnisführung entscheidet über Ausweitung.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-slide-id="text-flow-options">
+      <div class="kicker">ENTSCHEIDUNGSOPTIONEN</div>
+      <div class="options">
+        <div class="option">
+          <b>Weiter wie bisher</b>
+          <p>Lokale Optimierung, Verantwortung und Ressourcen bleiben verteilt.</p>
+        </div>
+        <div class="option">
+          <b>Verbindlicher Rahmen</b>
+          <p>Gemeinsame Ergebnisse, Kapazität und Entscheidungen werden zur Voraussetzung.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-slide-id="text-flow-open-points">
+      <div class="kicker">TRANSPARENZ VOR FREIGABE</div>
+      <div class="open-list">
+        <div class="openrow">
+          <div class="marker">?</div>
+          <div class="open-copy">
+            <b>Einsparungen</b>
+            <p>
+              Es gibt noch keine belastbare Schätzung der Einsparungen. Die Ergebnisgrößen werden zunächst als
+              Wirkungsnachweis genutzt.
+            </p>
+          </div>
+        </div>
+        <div class="openrow">
+          <div class="marker">?</div>
+          <div class="open-copy">
+            <b>Recht</b>
+            <p>Eine abschließende rechtliche Bewertung einzelner Vereinfachungen steht noch aus.</p>
+          </div>
+        </div>
+        <div class="openrow">
+          <div class="marker">?</div>
+          <div class="open-copy">
+            <b>Personalvertretungen</b>
+            <p>Eine Zusage der beteiligten Personalvertretungen liegt noch nicht vor.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metrics deliberately use nested divs: their number, unit and label are independent layout objects. -->
+    <section class="slide" data-slide-id="metric-components">
+      <div class="kicker">AUSGANGSLAGE</div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="value">1,8</div>
+          <div class="unit">Mio.</div>
+          <div class="label">Vorgänge pro Jahr</div>
+        </div>
+        <div class="metric">
+          <div class="value">2027–</div>
+          <div class="unit">2029</div>
+          <div class="label">Zeitraum des Modernisierungsbudgets</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-slide-id="text-flow-boundaries">
+      <div class="heading-flow">
+        <h3>Leitgedanke</h3>
+        <h4>Konsequenz</h4>
+        <p>Die Umsetzung folgt der Entscheidung.</p>
+      </div>
+      <div class="mixed-align">
+        <b>Getrennte Ausrichtung</b>
+        <p>Dieser Absatz ist bewusst rechtsbündig.</p>
+      </div>
+    </section>
+  </body>
+</html>

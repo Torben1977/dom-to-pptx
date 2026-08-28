@@ -24,7 +24,6 @@ import {
   generateBlurredSVG,
   getBorderInfo,
   generateCompositeBorderSVG,
-  isClippedByParent,
   generateCustomShapeSVG,
   getUsedFontFamilies,
   getAutoDetectedFonts,
@@ -33,6 +32,8 @@ import {
   detectVariantSlotCollisions,
   extractTableData,
   collectTextParts,
+  isInlineTextPseudoStyle,
+  getNodeHyperlink,
 } from './utils.js';
 import { getProcessedImage } from './image-processor.js';
 import { parseAnimation } from './animations/css-parser.js';
@@ -49,6 +50,8 @@ const PX_TO_INCH = 1 / PPI;
  * @param {boolean} [options.skipDownload=false] - If true, prevents automatic download
  * @param {Object} [options.listConfig] - Config for bullets
  * @param {boolean} [options.svgAsVector=false] - If true, keeps SVG as vector (for Convert to Shape in PowerPoint)
+ * @param {boolean} [options.strictFontEmbedding=false] - If true, aborts the export when any requested font
+ *   variant cannot be embedded instead of silently producing a fallback-font deck.
  * @param {boolean} [options.skipNormalize=false] - If true, skips re-zipping with DEFLATE
  *   and stripping dangling [Content_Types].xml Overrides. Leave it false unless you are
  *   debugging the raw PptxGenJS output, otherwise Microsoft PowerPoint may reject the file.
@@ -280,13 +283,7 @@ export async function exportToPptx(target, options = {}) {
             })
           );
 
-          await embedder.addFont(
-            fontCfg.name,
-            subsets,
-            options.woff2WasmUrl,
-            undefined,
-            fontCfg.variant || 'regular'
-          );
+          await embedder.addFont(fontCfg.name, subsets, options.woff2WasmUrl, undefined, fontCfg.variant || 'regular');
           embedResults.push({ label, ok: true });
         } catch (e) {
           const reason = e && e.message ? e.message : String(e);
@@ -315,6 +312,14 @@ export async function exportToPptx(target, options = {}) {
       );
       for (const r of failed) {
         console.error(`  - ${r.label}: ${r.reason}`);
+      }
+      if (options.strictFontEmbedding === true) {
+        const error = new Error(
+          `dom-to-pptx: required font embedding failed for ${failed.map((r) => r.label).join(', ')}`
+        );
+        error.code = 'DOM_TO_PPTX_FONT_EMBEDDING_FAILED';
+        error.details = failed;
+        throw error;
       }
     }
 
@@ -424,6 +429,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     let currentSortKey = parentSortKey;
     let currentOpacity = parentOpacity;
     let nodeStyle = null;
+    let skipCurrentNode = false;
     const nodeType = node.nodeType;
 
     if (nodeType === 1) {
@@ -433,10 +439,13 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
         currentOpacity *= elOpacity;
       }
 
-      // Optimization: Skip completely hidden elements immediately
-      if (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden' || currentOpacity === 0) {
+      // display:none and opacity:0 suppress the complete subtree. Visibility
+      // differs: descendants may explicitly restore visibility:visible, so only
+      // skip the current element and keep traversing element children.
+      if (nodeStyle.display === 'none' || currentOpacity === 0) {
         return;
       }
+      skipCurrentNode = nodeStyle.visibility === 'hidden' || nodeStyle.visibility === 'collapse';
       let zVal = 0;
       if (nodeStyle.zIndex !== 'auto') {
         const parsedZ = parseInt(nodeStyle.zIndex);
@@ -448,11 +457,13 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     }
 
     // Prepare the item. If it needs async work, it returns a 'job'
-    const result = prepareRenderItem(node, { ...layoutConfig, root }, order, pptx, currentSortKey, nodeStyle, {
-      ...globalOptions,
-      _inheritedOpacity: parentOpacity,
-      _inheritedAnimation: inheritedAnimation,
-    });
+    const result = skipCurrentNode
+      ? null
+      : prepareRenderItem(node, { ...layoutConfig, root }, order, pptx, currentSortKey, nodeStyle, {
+          ...globalOptions,
+          _inheritedOpacity: parentOpacity,
+          _inheritedAnimation: inheritedAnimation,
+        });
 
     if (result) {
       if (result.items) {
@@ -479,6 +490,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
       }
     }
     for (let i = 0; i < childNodes.length; i++) {
+      if (skipCurrentNode && childNodes[i].nodeType !== 1) continue;
       collect(childNodes[i], currentSortKey, currentOpacity, nextInheritedAnimation);
     }
   }
@@ -578,7 +590,10 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
           // 4. Adjust alignment for Icons to prevent baseline clipping
           // (Applies to <i>, <span>, or standard icon classes)
           const tag = (clonedNode?.tagName || '').toLowerCase();
-          const className = typeof clonedNode.className === 'string' ? clonedNode.className : (clonedNode.className && clonedNode.className.baseVal) || '';
+          const className =
+            typeof clonedNode.className === 'string'
+              ? clonedNode.className
+              : (clonedNode.className && clonedNode.className.baseVal) || '';
           if (tag === 'i' || tag === 'span' || className.includes('fa-')) {
             // Flex center helps align the glyph exactly in the middle of the box
             // preventing top/bottom cropping due to line-height mismatches.
@@ -744,12 +759,10 @@ async function capturePseudoElementCanvas(node, pseudoType, widthPx, heightPx) {
  * Detects Custom Elements AND generic tags (<i>, <span>) with icon classes/pseudo-elements.
  */
 function isIconElement(node) {
-  // 1. Custom Elements (hyphenated tags) or Explicit Library Tags
+  // 1. Explicit icon-library tags. A hyphenated tag alone is not an icon:
+  // semantic web components commonly contain ordinary editable text/layout.
   const tag = (node?.tagName || '').toLowerCase();
-  if (
-    tag.includes('-') ||
-    ['material-icon', 'iconify-icon', 'remix-icon', 'ion-icon', 'eva-icon', 'box-icon', 'fa-icon'].includes(tag)
-  ) {
+  if (['material-icon', 'iconify-icon', 'remix-icon', 'ion-icon', 'eva-icon', 'box-icon', 'fa-icon'].includes(tag)) {
     return true;
   }
 
@@ -776,6 +789,38 @@ function isIconElement(node) {
   }
 
   return false;
+}
+
+/**
+ * Return an SVG-only visual from an open Shadow Root.
+ *
+ * The narrow contract is intentional: semantic or mixed-content Web
+ * Components must continue through the normal editable DOM mapper. A component
+ * whose only visible Shadow-DOM child is an SVG can be represented faithfully
+ * as one vector picture without flattening unrelated HTML or slotted content.
+ */
+function getOpenShadowSvg(node) {
+  const shadowRoot = node?.shadowRoot;
+  if (!shadowRoot) return null;
+
+  const nonVisualTags = new Set(['style', 'link', 'script', 'template']);
+  const visibleChildren = Array.from(shadowRoot.children).filter((child) => {
+    const tag = (child?.tagName || '').toLowerCase();
+    if (nonVisualTags.has(tag)) return false;
+
+    const style = window.getComputedStyle(child);
+    const opacity = parseFloat(style.opacity);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.visibility !== 'collapse' &&
+      (Number.isNaN(opacity) || opacity > 0)
+    );
+  });
+
+  if (visibleChildren.length !== 1) return null;
+  const candidate = visibleChildren[0];
+  return (candidate?.tagName || '').toLowerCase() === 'svg' ? candidate : null;
 }
 
 function getNodeSelector(node) {
@@ -830,7 +875,7 @@ function getPseudoElementRect(hostRect, pseudoStyle) {
   const borderTop = parseFloat(pseudoStyle.borderTopWidth) || 0;
   const borderBottom = parseFloat(pseudoStyle.borderBottomWidth) || 0;
 
-  const isTriangle = (w === 0 && h === 0) && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
+  const isTriangle = w === 0 && h === 0 && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
   if (isTriangle) {
     w = borderLeft + borderRight;
     h = borderTop + borderBottom;
@@ -945,17 +990,27 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const borderRight = parseFloat(pseudoStyle.borderRightWidth) || 0;
   const borderTop = parseFloat(pseudoStyle.borderTopWidth) || 0;
   const borderBottom = parseFloat(pseudoStyle.borderBottomWidth) || 0;
-  const isTriangle = (wPx === 0 && hPx === 0) && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
+  const isTriangle =
+    wPx === 0 && hPx === 0 && (borderLeft > 0 || borderRight > 0) && (borderTop > 0 || borderBottom > 0);
 
   const isDisplayNone = pseudoStyle.display === 'none';
   const isVisible = !isDisplayNone && (hasContent || hasBg || hasBorder || hasGradient || isTriangle);
 
   if (!isVisible) return null;
 
+  // Ordinary inline pseudo-content is already part of collectTextParts().
+  // Keep a single owner so text is not duplicated. Positioned or decorated
+  // pseudo-elements fail this predicate and continue as independent objects.
+  if (hasContent && isInlineTextPseudoStyle(pseudoStyle) && isTextContainer(node)) {
+    return null;
+  }
+
   const rect = getPseudoElementRect(hostRect, pseudoStyle);
   if (!rect) {
     if (isVisible) {
-      console.warn(`dom-to-pptx: Unsupported pseudo-element ${pseudoType} on ${getNodeSelector(node)} due to zero dimensions. Element dropped.`);
+      console.warn(
+        `dom-to-pptx: Unsupported pseudo-element ${pseudoType} on ${getNodeSelector(node)} due to zero dimensions. Element dropped.`
+      );
     }
     return null;
   }
@@ -1185,7 +1240,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             w: unrotatedW,
             h: unrotatedH,
             margin: 0,
-            autoFit: true,
+            fit: 'shrink',
             wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
           },
         },
@@ -1237,6 +1292,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   const localOpacity = isNaN(elementOpacity) ? 1 : elementOpacity;
   const inheritedOpacity = globalOptions._inheritedOpacity || 1;
   const safeOpacity = localOpacity * inheritedOpacity;
+  const hyperlink = getNodeHyperlink(node);
+  const pictureTransparency = (opacity) =>
+    opacity < 1 ? { transparency: Math.round((1 - Math.max(0, opacity)) * 100) } : {};
 
   // Prefer the sub-pixel rect size to avoid 1px text-wrap artifacts caused by
   // offsetWidth/offsetHeight being integer-rounded. When the element is rotated
@@ -1329,7 +1387,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const declaredStart = Number.parseInt(node.getAttribute('start') || '', 10);
     let nextOrderedValue = Number.isFinite(declaredStart)
       ? declaredStart
-      : (orderedDirection < 0 ? liChildren.length : 1);
+      : orderedDirection < 0
+        ? liChildren.length
+        : 1;
 
     // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
     const listMargin = [
@@ -1421,17 +1481,13 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
 
         // A. Apply Bullet
         if (bullet) {
+          // A bullet is a paragraph property, not a rich-text run property.
+          // Applying it to every run makes PptxGenJS emit duplicate a:pPr /
+          // a:buChar nodes for one list item.
           if (parts.length > 0) {
-            parts.forEach((p) => {
-              p.options.bullet = bullet;
-            });
+            parts[0].options.bullet = bullet;
           } else {
-            parts.push({
-              text: '',
-              options: {
-                bullet: bullet,
-              },
-            });
+            parts.push({ text: '', options: { bullet } });
           }
         }
 
@@ -1536,7 +1592,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           valign: 'top',
           // CSS padding applied as PPTX text box insets, in points
           margin: listMargin,
-          autoFit: true,
+          fit: 'shrink',
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
@@ -1552,7 +1608,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
       domOrder,
-      options: { x, y, w, h, rotate: rotation, data: null },
+      options: {
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        data: null,
+        ...pictureTransparency(safeOpacity),
+        ...(hyperlink && { hyperlink }),
+      },
     };
 
     const job = async () => {
@@ -1572,13 +1637,58 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     return { items: [item], job, stopRecursion: true };
   }
 
+  // --- ASYNC JOB: SVG-only open Shadow Roots ---
+  // Preserve icon-like Web Components as vector pictures. Mixed Shadow DOM is
+  // deliberately left to an explicit future fallback so semantic content is
+  // never flattened by merely using a hyphenated custom-element tag.
+  const shadowSvg = getOpenShadowSvg(node);
+  if (shadowSvg) {
+    const title = shadowSvg.querySelector('title')?.textContent?.trim();
+    const altText = node.getAttribute('aria-label') || title || undefined;
+    const item = {
+      type: 'image',
+      zIndex: parentSortKey.concat([0, -1]),
+      domOrder,
+      options: {
+        data: null,
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        ...pictureTransparency(safeOpacity),
+        ...(hyperlink && { hyperlink }),
+        ...(altText && { altText }),
+      },
+    };
+
+    const job = async () => {
+      const processed = await svgToSvg(shadowSvg, { width: widthPx, height: heightPx });
+      if (processed) item.options.data = processed;
+      else item.skip = true;
+    };
+
+    return { items: [item], job, stopRecursion: true };
+  }
+
   // --- ASYNC JOB: SVG Tags ---
   if ((node?.nodeName || '').toLowerCase() === 'svg') {
     const item = {
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
       domOrder,
-      options: { data: null, x, y, w, h, rotate: rotation },
+      options: {
+        data: null,
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        // svgToSvg/svgToPng freezes the SVG element's own opacity into the
+        // serialized asset. Apply only ancestor compositing here.
+        ...pictureTransparency(inheritedOpacity),
+        ...(hyperlink && { hyperlink }),
+      },
     };
 
     const job = async () => {
@@ -1625,7 +1735,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
       domOrder,
-      options: { x, y, w, h, rotate: rotation, data: null },
+      options: {
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        data: null,
+        ...pictureTransparency(safeOpacity),
+        ...(hyperlink && { hyperlink }),
+      },
     };
 
     const job = async () => {
@@ -1643,7 +1762,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
       domOrder,
-      options: { x, y, w, h, rotate: rotation, data: null },
+      options: {
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        data: null,
+        ...pictureTransparency(inheritedOpacity),
+        ...(hyperlink && { hyperlink }),
+      },
     };
     const job = async () => {
       const pngData = await elementToCanvasImage(node, widthPx, heightPx);
@@ -1665,50 +1793,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     borderTopLeftRadius !== borderBottomRightRadius ||
     borderTopLeftRadius !== borderBottomLeftRadius;
 
-  const tempBg = parseColor(style.backgroundColor);
-  const isTxt = isTextContainer(node);
-  const hasContent = node.textContent.trim().length > 0 || node.children.length > 0;
-
-  if (hasPartialBorderRadius && tempBg.hex && !isTxt && !hasContent && !customShapeName) {
-    const shapeSvg = generateCustomShapeSVG(widthPx, heightPx, tempBg.hex, tempBg.opacity, {
-      tl: parseFloat(style.borderTopLeftRadius) || 0,
-      tr: parseFloat(style.borderTopRightRadius) || 0,
-      br: parseFloat(style.borderBottomRightRadius) || 0,
-      bl: parseFloat(style.borderBottomLeftRadius) || 0,
-    });
-
-    items.push({
-      type: 'image',
-      zIndex: parentSortKey.concat([-Infinity]),
-      domOrder,
-      options: { data: shapeSvg, x, y, w, h, rotate: rotation },
-    });
-  }
-
   let bgJob = null;
-
-  // --- ASYNC JOB: Clipped Divs via Canvas ---
-  if (hasPartialBorderRadius && isClippedByParent(node) && !hasContent) {
-    const marginLeft = parseFloat(style.marginLeft) || 0;
-    const marginTop = parseFloat(style.marginTop) || 0;
-    x += marginLeft * PX_TO_INCH * config.scale;
-    y += marginTop * PX_TO_INCH * config.scale;
-
-    const item = {
-      type: 'image',
-      zIndex: parentSortKey.concat([0, -1]),
-      domOrder,
-      options: { x, y, w, h, rotate: rotation, data: null },
-    };
-
-    bgJob = async () => {
-      const canvasImageData = await elementToCanvasImage(node, widthPx, heightPx);
-      if (canvasImageData) item.options.data = canvasImageData;
-      else item.skip = true;
-    };
-
-    items.push(item);
-  }
 
   // --- SYNC: Standard CSS Extraction ---
   const bgColorObj = parseColor(style.backgroundColor);
@@ -1746,35 +1831,62 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const textParts = collectTextParts(node, style, config.scale, null, true, inheritedOpacity);
 
     if (textParts.length > 0) {
+      const isRtl = style.direction === 'rtl';
       let align = style.textAlign || 'left';
-      if (align === 'start') align = 'left';
-      if (align === 'end') align = 'right';
+      if (align === 'start') align = isRtl ? 'right' : 'left';
+      if (align === 'end') align = isRtl ? 'left' : 'right';
       let valign = 'top';
       if (style.verticalAlign === 'middle') valign = 'middle';
       if (style.verticalAlign === 'bottom') valign = 'bottom';
 
       const isVertical = writingModeVert && writingModeVert !== 'none';
-      const isColumn = style.flexDirection === 'column' || style.flexDirection === 'column-reverse';
+      const isGrid = style.display.includes('grid');
+      const isFlex = style.display.includes('flex');
+      const flexDirection = style.flexDirection || 'row';
+      const isColumn = flexDirection === 'column' || flexDirection === 'column-reverse';
+      const isReverse = flexDirection === 'row-reverse' || flexDirection === 'column-reverse';
 
-      if (isVertical || isColumn) {
-        if (style.alignItems === 'center') align = 'center';
-        if (style.alignItems === 'flex-end' || style.alignItems === 'end') align = 'right';
+      const resolveHorizontal = (value, reverse = false) => {
+        if (value === 'center') return 'center';
+        const logicalStartOnRight = isRtl;
+        const flexStartOnRight = isRtl !== reverse;
+        if (value === 'start') return logicalStartOnRight ? 'right' : 'left';
+        if (value === 'end') return logicalStartOnRight ? 'left' : 'right';
+        if (value === 'flex-start') return flexStartOnRight ? 'right' : 'left';
+        if (value === 'flex-end') return flexStartOnRight ? 'left' : 'right';
+        return null;
+      };
+      const resolveVertical = (value, reverse = false) => {
+        if (value === 'center') return 'middle';
+        if (value === 'start') return 'top';
+        if (value === 'end') return 'bottom';
+        if (value === 'flex-start') return reverse ? 'bottom' : 'top';
+        if (value === 'flex-end') return reverse ? 'top' : 'bottom';
+        return null;
+      };
 
-        if (style.justifyContent === 'center' && style.display.includes('flex')) valign = 'middle';
-        if (style.justifyContent === 'flex-end' && style.display.includes('flex')) valign = 'bottom';
-      } else {
-        if (style.alignItems === 'center') valign = 'middle';
-        if (style.alignItems === 'flex-end' || style.alignItems === 'end') valign = 'bottom';
-
-        if (style.justifyContent === 'center' && style.display.includes('flex')) align = 'center';
-        if (style.justifyContent === 'flex-end' || style.justifyContent === 'end') {
-          if (style.display.includes('flex')) align = 'right';
-        }
+      if (isGrid) {
+        align = resolveHorizontal(style.justifyItems) || align;
+        valign = resolveVertical(style.alignItems) || valign;
+      } else if (isFlex && isColumn) {
+        align = resolveHorizontal(style.alignItems) || align;
+        valign = resolveVertical(style.justifyContent, isReverse) || valign;
+      } else if (isFlex) {
+        align = resolveHorizontal(style.justifyContent, isReverse) || align;
+        valign = resolveVertical(style.alignItems) || valign;
+      } else if (isVertical) {
+        align = resolveHorizontal(style.alignItems) || align;
+        valign = resolveVertical(style.justifyContent) || valign;
       }
 
       if (isVertical) {
         textParts.forEach((p) => {
           if (p.options) delete p.options.lineSpacing;
+        });
+      }
+      if (isRtl) {
+        textParts.forEach((part) => {
+          part.options = { ...part.options, rtlMode: true };
         });
       }
 
@@ -1788,7 +1900,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         padding[0] * 72, // top
       ];
 
-      textPayload = { text: textParts, align, valign, margin };
+      textPayload = { text: textParts, align, valign, margin, rtlMode: isRtl };
     }
   }
 
@@ -1806,7 +1918,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         type: 'image',
         zIndex: parentSortKey.concat([-Infinity]),
         domOrder,
-        options: { x, y, w, h, rotate: rotation, data: null },
+        options: {
+          x,
+          y,
+          w,
+          h,
+          rotate: rotation,
+          data: null,
+          ...pictureTransparency(safeOpacity),
+          ...(hyperlink && { hyperlink }),
+        },
       };
       items.push(bgItem);
 
@@ -1858,6 +1979,8 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             w: w + padIn * 2,
             h: h + padIn * 2,
             rotate: rotation,
+            ...pictureTransparency(safeOpacity),
+            ...(hyperlink && { hyperlink }),
           },
         });
       }
@@ -1878,8 +2001,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           valign: textPayload.valign,
           rotate: rotation,
           margin: textPayload.margin,
+          ...(textPayload.rtlMode && { rtlMode: true }),
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-          autoFit: true,
+          fit: 'shrink',
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
         },
@@ -1922,7 +2046,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         type: 'image',
         zIndex: parentSortKey.concat([-Infinity]),
         domOrder,
-        options: { data: shapeSvg, x, y, w, h, rotate: rotation },
+        options: {
+          data: shapeSvg,
+          x,
+          y,
+          w,
+          h,
+          rotate: rotation,
+          ...pictureTransparency(safeOpacity),
+          ...(hyperlink && { hyperlink }),
+        },
       });
     } else {
       const shapeOpts = {
@@ -1931,6 +2064,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         w,
         h,
         rotate: rotation,
+        // A text-bearing anchor already carries its link on the editable text
+        // runs. Passing the same link at shape level makes PptxGenJS emit an
+        // additional, unresolved rIdundefined hyperlink.
+        ...(hyperlink && !textPayload && { hyperlink }),
         ...(useSolidFill && {
           fill: { color: bgColorObj.hex || 'FFFFFF', transparency: transparency },
         }),
@@ -1964,7 +2101,41 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         shapeOpts.rectRadius = cappedRadiusPx * PX_TO_INCH * config.scale;
       }
 
-      if (textPayload) {
+      if (textPayload && shapeType === pptx.ShapeType.ellipse) {
+        // CSS lays out text in the rectangular content box even when border-radius
+        // paints an ellipse. A native PowerPoint ellipse instead narrows its text
+        // region along the curve, which changes wrapping and can shrink mixed runs.
+        // Keep the ellipse editable as decoration and overlay an editable rectangular
+        // text box using the browser's original padding and fit policy.
+        items.push({
+          type: 'shape',
+          zIndex: parentSortKey.concat([-Infinity]),
+          domOrder,
+          shapeType,
+          options: shapeOpts,
+        });
+        items.push({
+          type: 'text',
+          zIndex: parentSortKey.concat([0, -1]),
+          domOrder,
+          textParts: textPayload.text,
+          options: {
+            x,
+            y,
+            w,
+            h,
+            rotate: rotation,
+            align: textPayload.align,
+            valign: textPayload.valign,
+            margin: textPayload.margin,
+            ...(textPayload.rtlMode && { rtlMode: true }),
+            wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+            fit: 'shrink',
+            vert: writingModeVert,
+            ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
+          },
+        });
+      } else if (textPayload) {
         const textOptions = {
           shape: shapeType,
           ...shapeOpts,
@@ -1974,8 +2145,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           align: textPayload.align,
           valign: textPayload.valign,
           margin: textPayload.margin,
+          ...(textPayload.rtlMode && { rtlMode: true }),
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-          autoFit: true,
+          fit: 'shrink',
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
         };
@@ -2083,64 +2255,99 @@ function isComplexHierarchy(root) {
 function createCompositeBorderItems(sides, x, y, w, h, scale, zIndex, domOrder) {
   const items = [];
   const pxToInch = 1 / 96;
-  const common = { zIndex: zIndex, domOrder, shapeType: 'rect' };
+  const common = { type: 'shape', zIndex: zIndex, domOrder, shapeType: 'rect' };
+
+  const dashedLine = (side, lineX, lineY, lineW, lineH) => ({
+    type: 'shape',
+    zIndex,
+    domOrder,
+    shapeType: 'line',
+    options: {
+      x: lineX,
+      y: lineY,
+      w: lineW,
+      h: lineH,
+      line: {
+        color: side.color,
+        width: side.width * 0.75 * scale,
+        dashType: side.style === 'dotted' ? 'dot' : 'dash',
+        ...(side.opacity < 1 && { transparency: (1 - side.opacity) * 100 }),
+      },
+    },
+  });
 
   if (sides.top.width > 0)
-    items.push({
-      ...common,
-      options: {
-        x,
-        y,
-        w,
-        h: sides.top.width * pxToInch * scale,
-        fill: {
-          color: sides.top.color,
-          ...(sides.top.opacity < 1 && { transparency: (1 - sides.top.opacity) * 100 }),
-        },
-      },
-    });
+    items.push(
+      sides.top.style === 'dashed' || sides.top.style === 'dotted'
+        ? dashedLine(sides.top, x, y + (sides.top.width * pxToInch * scale) / 2, w, 0)
+        : {
+            ...common,
+            options: {
+              x,
+              y,
+              w,
+              h: sides.top.width * pxToInch * scale,
+              fill: {
+                color: sides.top.color,
+                ...(sides.top.opacity < 1 && { transparency: (1 - sides.top.opacity) * 100 }),
+              },
+            },
+          }
+    );
   if (sides.right.width > 0)
-    items.push({
-      ...common,
-      options: {
-        x: x + w - sides.right.width * pxToInch * scale,
-        y,
-        w: sides.right.width * pxToInch * scale,
-        h,
-        fill: {
-          color: sides.right.color,
-          ...(sides.right.opacity < 1 && { transparency: (1 - sides.right.opacity) * 100 }),
-        },
-      },
-    });
+    items.push(
+      sides.right.style === 'dashed' || sides.right.style === 'dotted'
+        ? dashedLine(sides.right, x + w - (sides.right.width * pxToInch * scale) / 2, y, 0, h)
+        : {
+            ...common,
+            options: {
+              x: x + w - sides.right.width * pxToInch * scale,
+              y,
+              w: sides.right.width * pxToInch * scale,
+              h,
+              fill: {
+                color: sides.right.color,
+                ...(sides.right.opacity < 1 && { transparency: (1 - sides.right.opacity) * 100 }),
+              },
+            },
+          }
+    );
   if (sides.bottom.width > 0)
-    items.push({
-      ...common,
-      options: {
-        x,
-        y: y + h - sides.bottom.width * pxToInch * scale,
-        w,
-        h: sides.bottom.width * pxToInch * scale,
-        fill: {
-          color: sides.bottom.color,
-          ...(sides.bottom.opacity < 1 && { transparency: (1 - sides.bottom.opacity) * 100 }),
-        },
-      },
-    });
+    items.push(
+      sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
+        ? dashedLine(sides.bottom, x, y + h - (sides.bottom.width * pxToInch * scale) / 2, w, 0)
+        : {
+            ...common,
+            options: {
+              x,
+              y: y + h - sides.bottom.width * pxToInch * scale,
+              w,
+              h: sides.bottom.width * pxToInch * scale,
+              fill: {
+                color: sides.bottom.color,
+                ...(sides.bottom.opacity < 1 && { transparency: (1 - sides.bottom.opacity) * 100 }),
+              },
+            },
+          }
+    );
   if (sides.left.width > 0)
-    items.push({
-      ...common,
-      options: {
-        x,
-        y,
-        w: sides.left.width * pxToInch * scale,
-        h,
-        fill: {
-          color: sides.left.color,
-          ...(sides.left.opacity < 1 && { transparency: (1 - sides.left.opacity) * 100 }),
-        },
-      },
-    });
+    items.push(
+      sides.left.style === 'dashed' || sides.left.style === 'dotted'
+        ? dashedLine(sides.left, x + (sides.left.width * pxToInch * scale) / 2, y, 0, h)
+        : {
+            ...common,
+            options: {
+              x,
+              y,
+              w: sides.left.width * pxToInch * scale,
+              h,
+              fill: {
+                color: sides.left.color,
+                ...(sides.left.opacity < 1 && { transparency: (1 - sides.left.opacity) * 100 }),
+              },
+            },
+          }
+    );
 
   return items;
 }

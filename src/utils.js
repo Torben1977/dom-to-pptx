@@ -39,21 +39,142 @@ export function extractTableData(node, scale) {
   const rows = [];
   const colWidths = [];
 
-  // 1. Calculate Column Widths based on the first row of cells
-  // We look at the first <tr>'s children to determine visual column widths.
-  // Note: This assumes a fixed grid. Complex colspan/rowspan on the first row
-  // might skew widths, but getBoundingClientRect captures the rendered result.
-  const firstRow = node.querySelector('tr');
-  if (firstRow) {
-    const cells = Array.from(firstRow.children);
-    cells.forEach((cell) => {
-      const rect = cell.getBoundingClientRect();
-      const colspan = parseInt(cell.getAttribute('colspan')) || 1;
-      const wIn = (rect.width * (1 / 96) * scale) / colspan;
-      for (let i = 0; i < colspan; i++) {
-        colWidths.push(wIn);
+  const widthInches = (element) => {
+    const rectWidth = element.getBoundingClientRect().width;
+    const cssWidth = parseFloat(window.getComputedStyle(element).width);
+    const px = rectWidth > 0 ? rectWidth : cssWidth;
+    return Number.isFinite(px) && px > 0 ? px * (1 / 96) * scale : 0;
+  };
+
+  // 1. Derive the rendered column grid. A merged header is not evidence that
+  // the underlying columns are equally wide, so prefer explicit <col> tracks
+  // and then a fully expanded measured row. Equal splitting is only a fallback.
+  const colElements = Array.from(node.children)
+    .filter((child) => (child?.tagName || '').toLowerCase() === 'colgroup')
+    .flatMap((group) => Array.from(group.children).filter((child) => (child?.tagName || '').toLowerCase() === 'col'));
+
+  const explicitColWidths = [];
+  for (const col of colElements) {
+    const span = parseInt(col.getAttribute('span')) || 1;
+    const totalWidth = widthInches(col);
+    const widthPerColumn = totalWidth / span;
+    if (widthPerColumn <= 0) {
+      explicitColWidths.length = 0;
+      break;
+    }
+    for (let i = 0; i < span; i++) explicitColWidths.push(widthPerColumn);
+  }
+
+  const isInsideDisplayNoneGroup = (row) => {
+    for (let current = row; current && current !== node; current = current.parentElement) {
+      if (window.getComputedStyle(current).display === 'none') return true;
+    }
+    return false;
+  };
+  const trList = Array.from(node.querySelectorAll('tr')).filter((row) => {
+    const rowStyle = window.getComputedStyle(row);
+    return !isInsideDisplayNoneGroup(row) && rowStyle.visibility !== 'collapse';
+  });
+  if (trList.length > 0) {
+    const equations = [];
+    let activeRowspans = [];
+    let logicalColumnCount = explicitColWidths.length;
+
+    for (const row of trList) {
+      const cells = Array.from(row.children).filter((cell) =>
+        ['td', 'th'].includes((cell?.tagName || '').toLowerCase())
+      );
+      const occupied = activeRowspans.map((remaining) => remaining > 0);
+      const nextRowspans = activeRowspans.map((remaining) => Math.max(0, remaining - 1));
+      let cursor = 0;
+
+      for (const cell of cells) {
+        const colspan = parseInt(cell.getAttribute('colspan')) || 1;
+        const rowspan = parseInt(cell.getAttribute('rowspan')) || 1;
+
+        while (occupied[cursor]) cursor++;
+        while (Array.from({ length: colspan }, (_, offset) => occupied[cursor + offset]).some(Boolean)) {
+          cursor++;
+          while (occupied[cursor]) cursor++;
+        }
+
+        const measuredWidth = widthInches(cell);
+        if (measuredWidth > 0) {
+          equations.push({ start: cursor, span: colspan, width: measuredWidth });
+        }
+
+        for (let offset = 0; offset < colspan; offset++) {
+          occupied[cursor + offset] = true;
+          if (rowspan > 1) {
+            nextRowspans[cursor + offset] = Math.max(nextRowspans[cursor + offset] || 0, rowspan - 1);
+          }
+        }
+        cursor += colspan;
       }
+
+      logicalColumnCount = Math.max(logicalColumnCount, occupied.length, cursor);
+      activeRowspans = nextRowspans;
+    }
+
+    // A partial <colgroup> defines only the tracks it names. Seed those
+    // columns, then complete the remaining grid from the cells the browser
+    // actually laid out. Treating a partial list as the whole grid causes
+    // PptxGenJS to repeat one width across every implicit column.
+    const solvedWidths = Array(logicalColumnCount).fill(null);
+    explicitColWidths.forEach((width, index) => {
+      solvedWidths[index] = width;
     });
+    for (const equation of equations.filter(({ span }) => span === 1)) {
+      if (solvedWidths[equation.start] == null) {
+        solvedWidths[equation.start] = equation.width;
+      }
+    }
+
+    // A colspan is a linear constraint over adjacent tracks. Resolve every
+    // constraint that has a single unknown after the directly measured cells.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const equation of equations) {
+        const indexes = Array.from({ length: equation.span }, (_, offset) => equation.start + offset);
+        const unknown = indexes.filter((index) => solvedWidths[index] == null);
+        if (unknown.length !== 1) continue;
+        const knownWidth = indexes.reduce((sum, index) => sum + (solvedWidths[index] || 0), 0);
+        const remaining = equation.width - knownWidth;
+        if (remaining > 0) {
+          solvedWidths[unknown[0]] = remaining;
+          changed = true;
+        }
+      }
+    }
+
+    // If only merged cells exist, an equal split is the least-assumptive
+    // fallback for the still-underdetermined tracks within that exact span.
+    for (const equation of equations) {
+      const indexes = Array.from({ length: equation.span }, (_, offset) => equation.start + offset);
+      const unknown = indexes.filter((index) => solvedWidths[index] == null);
+      if (unknown.length === 0) continue;
+      const knownWidth = indexes.reduce((sum, index) => sum + (solvedWidths[index] || 0), 0);
+      const share = (equation.width - knownWidth) / unknown.length;
+      if (share > 0) unknown.forEach((index) => (solvedWidths[index] = share));
+    }
+
+    const measuredTableWidth = widthInches(node);
+    const knownTotal = solvedWidths.reduce((sum, width) => sum + (width || 0), 0);
+    const unresolved = solvedWidths.filter((width) => width == null).length;
+    const fallbackWidth =
+      unresolved > 0 && measuredTableWidth > knownTotal
+        ? (measuredTableWidth - knownTotal) / unresolved
+        : logicalColumnCount > 0
+          ? measuredTableWidth / logicalColumnCount
+          : 0;
+
+    for (const width of solvedWidths) {
+      const resolved = width || fallbackWidth;
+      if (resolved > 0) colWidths.push(resolved);
+    }
+  } else {
+    colWidths.push(...explicitColWidths);
   }
 
   const tableStyle = window.getComputedStyle(node);
@@ -64,7 +185,6 @@ export function extractTableData(node, scale) {
   const vSpacePt = vSpace * 0.75 * scale;
 
   // 2. Iterate Rows
-  const trList = node.querySelectorAll('tr');
   trList.forEach((tr) => {
     const rowData = [];
     const cellList = Array.from(tr.children).filter((c) => ['td', 'th'].includes((c?.tagName || '').toLowerCase()));
@@ -298,17 +418,44 @@ export function generateCompositeBorderSVG(w, h, radius, sides) {
   const clipId = 'clip_' + Math.random().toString(36).substr(2, 9);
   let borderRects = '';
 
+  const dashAttributes = (side) => {
+    if (side.style === 'dashed') {
+      return `stroke-dasharray="${side.width * 3} ${side.width * 2}"`;
+    }
+    if (side.style === 'dotted') {
+      return `stroke-dasharray="0.01 ${side.width * 2}" stroke-linecap="round"`;
+    }
+    return '';
+  };
+
+  const line = (side, x1, y1, x2, y2) =>
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
+    `stroke="#${side.color}" stroke-opacity="${side.opacity ?? 1}" ` +
+    `stroke-width="${side.width}" ${dashAttributes(side)} />`;
+
   if (sides.top.width > 0 && sides.top.color) {
-    borderRects += `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`;
+    borderRects +=
+      sides.top.style === 'dashed' || sides.top.style === 'dotted'
+        ? line(sides.top, 0, sides.top.width / 2, w, sides.top.width / 2)
+        : `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`;
   }
   if (sides.right.width > 0 && sides.right.color) {
-    borderRects += `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`;
+    borderRects +=
+      sides.right.style === 'dashed' || sides.right.style === 'dotted'
+        ? line(sides.right, w - sides.right.width / 2, 0, w - sides.right.width / 2, h)
+        : `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`;
   }
   if (sides.bottom.width > 0 && sides.bottom.color) {
-    borderRects += `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`;
+    borderRects +=
+      sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
+        ? line(sides.bottom, 0, h - sides.bottom.width / 2, w, h - sides.bottom.width / 2)
+        : `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`;
   }
   if (sides.left.width > 0 && sides.left.color) {
-    borderRects += `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`;
+    borderRects +=
+      sides.left.style === 'dashed' || sides.left.style === 'dotted'
+        ? line(sides.left, sides.left.width / 2, 0, sides.left.width / 2, h)
+        : `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`;
   }
 
   const svg = `
@@ -586,6 +733,9 @@ export function getTextStyle(style, scale, includeMargins = true, inheritedOpaci
 
   const transparency = Math.round((1 - opacity) * 100);
 
+  const textDecoration = `${style.textDecorationLine || ''} ${style.textDecoration || ''}`;
+  const verticalAlign = String(style.verticalAlign || '').toLowerCase();
+
   return {
     color: colorObj.hex || '000000',
     ...(transparency > 0 && { transparency }),
@@ -593,7 +743,10 @@ export function getTextStyle(style, scale, includeMargins = true, inheritedOpaci
     fontSize: fontSizePx * 0.75 * scale,
     bold: parseInt(style.fontWeight) >= 600,
     italic: style.fontStyle === 'italic',
-    underline: style.textDecoration.includes('underline'),
+    underline: textDecoration.includes('underline'),
+    strike: textDecoration.includes('line-through'),
+    ...(verticalAlign === 'super' && { superscript: true }),
+    ...(verticalAlign === 'sub' && { subscript: true }),
     // Only add if we have a valid value
     ...(lineSpacing && { lineSpacing }),
     ...(paraSpaceBefore > 0 && { paraSpaceBefore }),
@@ -610,6 +763,41 @@ export function getTextStyle(style, scale, includeMargins = true, inheritedOpaci
 }
 
 /**
+ * Returns true when the element itself is not painted. `visibility` is
+ * intentionally included even though a descendant may restore
+ * `visibility:visible`; callers that prune whole subtrees must handle that CSS
+ * distinction separately.
+ */
+export function isVisuallySuppressed(node) {
+  if (!node || node.nodeType !== 1) return false;
+  const style = window.getComputedStyle(node);
+  const opacity = parseFloat(style.opacity);
+  return (
+    style.display === 'none' ||
+    style.visibility === 'hidden' ||
+    style.visibility === 'collapse' ||
+    (!Number.isNaN(opacity) && opacity <= 0)
+  );
+}
+
+function hasVisibleDescendantThroughHiddenVisibility(node) {
+  for (const child of Array.from(node?.children || [])) {
+    const style = window.getComputedStyle(child);
+    const opacity = parseFloat(style.opacity);
+
+    // These properties suppress the complete descendant subtree.  Unlike
+    // visibility, neither can be restored by a child declaration.
+    if (style.display === 'none' || (!Number.isNaN(opacity) && opacity <= 0)) {
+      continue;
+    }
+
+    if (style.visibility === 'visible') return true;
+    if (hasVisibleDescendantThroughHiddenVisibility(child)) return true;
+  }
+  return false;
+}
+
+/**
  * Determines if a given DOM node is primarily a text container.
  * Updated to correctly reject Icon elements so they are rendered as images.
  */
@@ -617,7 +805,25 @@ export function isTextContainer(node) {
   const hasText = node.textContent.trim().length > 0;
   if (!hasText) return false;
 
-  const children = Array.from(node.children);
+  const nodeStyle = window.getComputedStyle(node);
+  if (nodeStyle.visibility === 'hidden' || nodeStyle.visibility === 'collapse') {
+    return false;
+  }
+
+  const children = Array.from(node.children).filter((child) => {
+    const childStyle = window.getComputedStyle(child);
+    const opacity = parseFloat(childStyle.opacity);
+    if (childStyle.display === 'none' || (!Number.isNaN(opacity) && opacity <= 0)) {
+      return false;
+    }
+    if (childStyle.visibility === 'hidden' || childStyle.visibility === 'collapse') {
+      // A visibility-hidden wrapper can contain a visibility-visible child.
+      // Keep such a wrapper in the structural analysis so the ancestor is not
+      // collapsed into one text box that would discard the visible override.
+      return hasVisibleDescendantThroughHiddenVisibility(child);
+    }
+    return true;
+  });
   if (children.length === 0) return true;
 
   const isSafeInline = (el) => {
@@ -650,6 +856,16 @@ export function isTextContainer(node) {
 
     const style = window.getComputedStyle(el);
     const display = style.display;
+
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') {
+      return false;
+    }
+
+    // Inline formatting only guarantees shared text flow for true inline
+    // boxes. Atomic inline boxes keep their own width/alignment/layout and
+    // cannot be represented faithfully as a PowerPoint rich-text run.
+    const isAtomicInline = ['inline-block', 'inline-flex', 'inline-grid', 'inline-table'].includes(display);
+    if (isAtomicInline) return false;
 
     // Reject block displays and flex/grid items
     const isBlockDisplay = display === 'block' || display === 'flex' || display === 'grid' || display === 'table';
@@ -688,7 +904,69 @@ export function isTextContainer(node) {
     return true;
   };
 
-  return children.every(isSafeInline);
+  if (children.every(isSafeInline)) return true;
+
+  // These properties are applied to a PPTX text box, not to an individual
+  // rich-text run.  A shared text box is only safe when all direct children
+  // agree with their parent on them.
+  const normalizeTextAlign = (value) => {
+    const align = value || 'start';
+    if (align === 'start') return 'left';
+    if (align === 'end') return 'right';
+    return align;
+  };
+  const getFlowContext = (style) => ({
+    textAlign: normalizeTextAlign(style.textAlign),
+    whiteSpace: style.whiteSpace || 'normal',
+    direction: style.direction || 'ltr',
+    writingMode: style.writingMode || 'horizontal-tb',
+  });
+  const parentFlowContext = getFlowContext(window.getComputedStyle(node));
+  const hasMatchingFlowContext = (el) => {
+    const childFlowContext = getFlowContext(window.getComputedStyle(el));
+    return Object.entries(parentFlowContext).every(([key, value]) => childFlowContext[key] === value);
+  };
+
+  // A common editorial pattern is an inline or heading-style lead followed by
+  // one or more normal-flow paragraphs inside a card.  Exporting those children
+  // independently gives an inline lead only its natural DOM width.  When
+  // PowerPoint wraps it, later paragraph boxes do not move and the text overlaps.
+  // Treat only plain, stacked text blocks as one flow; layout containers,
+  // decorated blocks and positioned children remain independent PPTX objects.
+  const isPlainFlowBlock = (el) => {
+    const tag = (el?.tagName || '').toLowerCase();
+    if (!['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote'].includes(tag)) {
+      return false;
+    }
+
+    const style = window.getComputedStyle(el);
+    if (style.display !== 'block') return false;
+    if (style.position && style.position !== 'static') return false;
+    if (style.float && style.float !== 'none') return false;
+    if (style.transform && style.transform !== 'none') return false;
+    if (style.overflow && style.overflow !== 'visible') return false;
+    if (
+      parseFloat(style.paddingTop) ||
+      parseFloat(style.paddingRight) ||
+      parseFloat(style.paddingBottom) ||
+      parseFloat(style.paddingLeft)
+    ) {
+      return false;
+    }
+
+    const bgColor = parseColor(style.backgroundColor, style);
+    const hasVisibleBg = bgColor.hex && bgColor.opacity > 0;
+    const hasBorder = parseFloat(style.borderWidth) > 0 && parseColor(style.borderColor, style).opacity > 0;
+    if (hasVisibleBg || hasBorder) return false;
+
+    return Array.from(el.children).every(isSafeInline);
+  };
+
+  const hasFlowBlock = children.some(isPlainFlowBlock);
+  return (
+    hasFlowBlock &&
+    children.every((child) => hasMatchingFlowContext(child) && (isSafeInline(child) || isPlainFlowBlock(child)))
+  );
 }
 
 export function getRotation(transformStr) {
@@ -761,15 +1039,19 @@ export function svgToPng(node) {
 
 /**
  * Converts an SVG node to an SVG data URL (preserves vector format)
- * This allows "Convert to Shape" in PowerPoint
+ * This allows "Convert to Shape" in PowerPoint.
+ *
+ * @param {SVGElement} node
+ * @param {{width?: number, height?: number}} [outputSize] - Optional rendered
+ *   dimensions, used when an SVG inside a Shadow Root is sized by its host.
  */
-export function svgToSvg(node) {
+export function svgToSvg(node, outputSize = {}) {
   return new Promise((resolve) => {
     try {
       const clone = node.cloneNode(true);
       const rect = node.getBoundingClientRect();
-      const width = rect.width || 300;
-      const height = rect.height || 150;
+      const width = outputSize.width || rect.width || 300;
+      const height = outputSize.height || rect.height || 150;
 
       inlineSvgStyles(node, clone);
       clone.setAttribute('width', width);
@@ -803,6 +1085,16 @@ function inlineSvgStyles(source, target) {
     'stroke-width',
     'stroke-linecap',
     'stroke-linejoin',
+    'stroke-opacity',
+    'stroke-dasharray',
+    'stroke-dashoffset',
+    'fill-opacity',
+    'fill-rule',
+    'clip-rule',
+    'stop-color',
+    'stop-opacity',
+    'vector-effect',
+    'paint-order',
     'opacity',
     'font-family',
     'font-size',
@@ -817,7 +1109,7 @@ function inlineSvgStyles(source, target) {
 
   properties.forEach((prop) => {
     if (prop !== 'fill' && prop !== 'stroke') {
-      const val = computed[prop];
+      const val = computed.getPropertyValue(prop) || computed[prop];
       if (val && val !== 'auto') target.style[prop] = val;
     }
   });
@@ -869,9 +1161,9 @@ export function generateGradientSVG(w, h, bgString, radius, border) {
     const parts = content.split(/,(?![^()]*\))/).map((p) => p.trim());
     if (parts.length < 2) return null;
 
-    let x1 = '0%',
+    let x1 = '50%',
       y1 = '0%',
-      x2 = '0%',
+      x2 = '50%',
       y2 = '100%';
     let stopsStartIndex = 0;
     const firstPart = parts[0].toLowerCase();
@@ -882,19 +1174,28 @@ export function generateGradientSVG(w, h, bgString, radius, border) {
       const direction = firstPart.replace('to ', '').trim();
       switch (direction) {
         case 'top':
+          x1 = '50%';
           y1 = '100%';
+          x2 = '50%';
           y2 = '0%';
           break;
         case 'bottom':
+          x1 = '50%';
           y1 = '0%';
+          x2 = '50%';
           y2 = '100%';
           break;
         case 'left':
           x1 = '100%';
+          y1 = '50%';
           x2 = '0%';
+          y2 = '50%';
           break;
         case 'right':
+          x1 = '0%';
+          y1 = '50%';
           x2 = '100%';
+          y2 = '50%';
           break;
         case 'top right':
           x1 = '0%';
@@ -926,19 +1227,31 @@ export function generateGradientSVG(w, h, bgString, radius, border) {
       // We convert this to SVG coordinates on a unit square (0-100%).
       // Formula: Map angle to perimeter coordinates.
       if (!isNaN(val)) {
-        const deg = firstPart.includes('rad') ? val * (180 / Math.PI) : val;
-        const cssRad = ((deg - 90) * Math.PI) / 180; // Correct CSS angle offset
+        let deg = val;
+        if (firstPart.endsWith('rad')) deg = val * (180 / Math.PI);
+        if (firstPart.endsWith('turn')) deg = val * 360;
+        if (firstPart.endsWith('grad')) deg = val * 0.9;
 
-        // Calculate standard vector for rectangle center (50, 50)
-        const scale = 50; // Distance from center to edge (approx)
-        const cos = Math.cos(cssRad); // Y component (reversed in SVG)
-        const sin = Math.sin(cssRad); // X component
+        // CSS angles start at the top and rotate clockwise. SVG coordinates
+        // point downwards, hence dy = -cos(theta). Project the box corners on
+        // that vector so non-square gradients retain CSS's full coverage.
+        const theta = (deg * Math.PI) / 180;
+        const dx = Math.sin(theta);
+        const dy = -Math.cos(theta);
+        const halfLength = (Math.abs(w * dx) + Math.abs(h * dy)) / 2;
+        const startX = w / 2 - dx * halfLength;
+        const startY = h / 2 - dy * halfLength;
+        const endX = w / 2 + dx * halfLength;
+        const endY = h / 2 + dy * halfLength;
+        const percent = (value, size) => {
+          const rounded = Math.round((value / size) * 1000) / 10;
+          return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+        };
 
-        // Invert Y for SVG coordinate system
-        x1 = (50 - sin * scale).toFixed(1) + '%';
-        y1 = (50 + cos * scale).toFixed(1) + '%';
-        x2 = (50 + sin * scale).toFixed(1) + '%';
-        y2 = (50 - cos * scale).toFixed(1) + '%';
+        x1 = percent(startX, w);
+        y1 = percent(startY, h);
+        x2 = percent(endX, w);
+        y2 = percent(endY, h);
       }
     }
 
@@ -1151,14 +1464,19 @@ function extractFontUrl(srcStr) {
  */
 export function extractSpeakerNotesFromElement(root) {
   if (!root || typeof root.querySelectorAll !== 'function') return '';
-  const nodes = root.querySelectorAll('[data-pptx-notes]');
+  const nodes = [
+    ...(root.matches?.('[data-pptx-notes]') ? [root] : []),
+    ...Array.from(root.querySelectorAll('[data-pptx-notes]')),
+  ];
   const parts = [];
-  for (const node of Array.from(nodes)) {
+  for (const node of nodes) {
+    const attributeValue = node.getAttribute('data-pptx-notes');
     // <template> stores its markup in a DocumentFragment on `.content`;
     // its own `.textContent` is empty. Fall back to `.textContent` for
     // every other element type.
     const isTemplate = (node?.tagName || '').toLowerCase() === 'template';
-    const raw = isTemplate && node.content ? node.content.textContent : node.textContent;
+    const contentValue = isTemplate && node.content ? node.content.textContent : node.textContent;
+    const raw = attributeValue && attributeValue.trim() ? attributeValue : contentValue;
     if (!raw) continue;
     const trimmed = raw.trim();
     if (trimmed) parts.push(trimmed);
@@ -1376,7 +1694,9 @@ export async function getAutoDetectedFonts(usedFamilies) {
  * and so the classification is unit-testable.
  */
 export function classifyFontVariant(weight, style) {
-  const wRaw = String(weight || '400').toLowerCase().trim();
+  const wRaw = String(weight || '400')
+    .toLowerCase()
+    .trim();
   let w = parseInt(wRaw, 10);
   if (isNaN(w)) {
     if (wRaw === 'bold' || wRaw === 'bolder') w = 700;
@@ -1460,6 +1780,100 @@ export function splitPreformattedText(value, whiteSpace, options = {}) {
   return lines.map((line, i) => ({ text: transform(line), breakLine: i < lines.length - 1 }));
 }
 
+/**
+ * Resolve the nearest anchor exactly as the browser does. `HTMLAnchorElement.href`
+ * expands relative URLs against `<base>`/document URL, unlike getAttribute().
+ */
+export function getNodeHyperlink(node) {
+  if (!node || node.nodeType !== 1 || typeof node.closest !== 'function') return null;
+  const anchor = node.closest('a[href]');
+  if (!anchor) return null;
+  const url = anchor.href || anchor.getAttribute('href');
+  if (!url) return null;
+  return {
+    url,
+    tooltip: anchor.getAttribute('title') || undefined,
+  };
+}
+
+function isBlockFlowDisplay(display) {
+  const normalized = String(display || '').toLowerCase();
+  return (
+    ['block', 'list-item', 'flow-root', 'flex', 'grid', 'table'].includes(normalized) || normalized.startsWith('table-')
+  );
+}
+
+function hasNonZeroBoxSpacing(style) {
+  return [
+    style.marginTop,
+    style.marginRight,
+    style.marginBottom,
+    style.marginLeft,
+    style.paddingTop,
+    style.paddingRight,
+    style.paddingBottom,
+    style.paddingLeft,
+  ].some((value) => (parseFloat(value) || 0) !== 0);
+}
+
+/**
+ * True when textual pseudo-content participates in the host's ordinary inline
+ * text flow. Such content belongs in the host rich-text runs; positioned or
+ * decorated pseudo-elements remain independent PowerPoint objects.
+ */
+export function isInlineTextPseudoStyle(style) {
+  if (!style) return false;
+
+  const display = String(style.display || '').toLowerCase();
+  const position = String(style.position || 'static').toLowerCase();
+  const float = String(style.float || 'none').toLowerCase();
+  const transform = String(style.transform || 'none').toLowerCase();
+  if (display !== 'inline' || position !== 'static' || float !== 'none' || transform !== 'none') {
+    return false;
+  }
+
+  const background = parseColor(style.backgroundColor, style);
+  const border = parseColor(style.borderColor, style);
+  const hasBackground =
+    (background.hex && background.opacity > 0) || (style.backgroundImage && style.backgroundImage !== 'none');
+  const hasBorder = (parseFloat(style.borderWidth) || 0) > 0 && border.opacity > 0;
+
+  return !hasBackground && !hasBorder && !hasNonZeroBoxSpacing(style);
+}
+
+function normalizeCollapsibleTextPartBoundaries(parts) {
+  let firstInSegment = true;
+  let previousTextPart = null;
+
+  for (const part of parts) {
+    if (part.options?.breakLine) {
+      if (previousTextPart) {
+        previousTextPart.text = previousTextPart.text.replace(/[\t\n\f\r ]+$/, '');
+      }
+      firstInSegment = true;
+      previousTextPart = null;
+      continue;
+    }
+
+    if (typeof part.text !== 'string' || part.text.length === 0) continue;
+
+    if (firstInSegment) {
+      part.text = part.text.replace(/^[\t\n\f\r ]+/, '');
+    } else if (previousTextPart && /[\t\n\f\r ]$/.test(previousTextPart.text) && /^[\t\n\f\r ]/.test(part.text)) {
+      part.text = part.text.replace(/^[\t\n\f\r ]+/, '');
+    }
+
+    if (part.text.length > 0) {
+      firstInSegment = false;
+      previousTextPart = part;
+    }
+  }
+
+  if (previousTextPart) {
+    previousTextPart.text = previousTextPart.text.replace(/[\t\n\f\r ]+$/, '');
+  }
+}
+
 export function collectTextParts(
   node,
   parentStyle,
@@ -1468,25 +1882,27 @@ export function collectTextParts(
   isRoot = true,
   inheritedOpacity = 1
 ) {
+  if (node.nodeType === 1 && isVisuallySuppressed(node)) return [];
+
   const parts = [];
   let hyperlink = activeHyperlink;
 
   // Hyperlink inheritance: If no hyperlink is active, check if this node is an <a> or inside one.
   if (!hyperlink && node.nodeType === 1) {
-    const aNode = node.closest('a');
-    if (aNode) {
-      const href = aNode.getAttribute('href');
-      if (href) {
-        hyperlink = { url: href, tooltip: aNode.getAttribute('title') || undefined };
-      }
-    }
+    hyperlink = getNodeHyperlink(node);
   }
 
   // Check for CSS Content (::before) - often used for icons
   if (node.nodeType === 1) {
     const beforeStyle = window.getComputedStyle(node, '::before');
     const content = beforeStyle.content;
-    if (content && content !== 'none' && content !== 'normal' && content !== '""') {
+    if (
+      content &&
+      content !== 'none' &&
+      content !== 'normal' &&
+      content !== '""' &&
+      isInlineTextPseudoStyle(beforeStyle)
+    ) {
       // Strip quotes
       const cleanContent = content.replace(/^['"]|['"]$/g, '');
       if (cleanContent.trim()) {
@@ -1501,9 +1917,8 @@ export function collectTextParts(
           }
         }
 
-        const trailSpace = cleanContent.endsWith(' ') || cleanContent.endsWith('\xa0') ? '' : ' ';
         parts.push({
-          text: cleanContent + trailSpace, // Add space after icon
+          text: cleanContent,
           options: textOpts,
         });
       }
@@ -1551,14 +1966,16 @@ export function collectTextParts(
       }
 
       // Text (white-space: normal / nowrap — collapse runs of whitespace)
-      let val = child.nodeValue.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ');
+      let val = child.nodeValue.replace(/[\t\n\f\r ]+/g, ' ');
 
-      if (index === 0) val = val.trimStart();
+      if (isRoot && index === 0) val = val.replace(/^[\t\n\f\r ]+/, '');
       if (trimNextLeading) {
-        val = val.trimStart();
+        val = val.replace(/^[\t\n\f\r ]+/, '');
         trimNextLeading = false;
       }
-      if (index === node.childNodes.length - 1) val = val.trimEnd();
+      if (isRoot && index === node.childNodes.length - 1) {
+        val = val.replace(/[\t\n\f\r ]+$/, '');
+      }
 
       if (val) {
         // Use parent style if child is text node, otherwise current style
@@ -1596,6 +2013,8 @@ export function collectTextParts(
         });
       }
     } else if (child.nodeType === 1) {
+      if (isVisuallySuppressed(child)) return;
+
       if ((child?.tagName || '').toLowerCase() === 'br') {
         if (parts.length > 0) {
           const lastPart = parts[parts.length - 1];
@@ -1606,12 +2025,17 @@ export function collectTextParts(
         parts.push({ text: '', options: { breakLine: true } });
         trimNextLeading = true;
       } else {
-        const isBlock = ['div', 'p', 'li'].includes((child?.tagName || '').toLowerCase());
+        const childStyle = window.getComputedStyle(child);
+        const isBlock = isBlockFlowDisplay(childStyle.display);
         if (isBlock && parts.length > 0 && !parts[parts.length - 1].options?.breakLine) {
           parts.push({ text: '', options: { breakLine: true } });
         }
 
-        const childParts = collectTextParts(child, parentStyle, scale, hyperlink, false, inheritedOpacity);
+        const nodeStyle = node.nodeType === 1 ? window.getComputedStyle(node) : parentStyle;
+        const nodeOpacity = parseFloat(nodeStyle?.opacity);
+        const childInheritedOpacity =
+          inheritedOpacity * (Number.isNaN(nodeOpacity) ? 1 : Math.max(0, Math.min(1, nodeOpacity)));
+        const childParts = collectTextParts(child, parentStyle, scale, hyperlink, false, childInheritedOpacity);
         if (childParts.length > 0) parts.push(...childParts);
 
         if (isBlock) {
@@ -1626,7 +2050,13 @@ export function collectTextParts(
   if (node.nodeType === 1) {
     const afterStyle = window.getComputedStyle(node, '::after');
     const content = afterStyle.content;
-    if (content && content !== 'none' && content !== 'normal' && content !== '""') {
+    if (
+      content &&
+      content !== 'none' &&
+      content !== 'normal' &&
+      content !== '""' &&
+      isInlineTextPseudoStyle(afterStyle)
+    ) {
       // Strip quotes
       const cleanContent = content.replace(/^['"]|['"]$/g, '');
       if (cleanContent.trim()) {
@@ -1641,9 +2071,8 @@ export function collectTextParts(
           }
         }
 
-        const leadSpace = cleanContent.startsWith(' ') || cleanContent.startsWith('\xa0') ? '' : ' ';
         parts.push({
-          text: leadSpace + cleanContent, // Add space before icon/content
+          text: cleanContent,
           options: textOpts,
         });
       }
@@ -1653,6 +2082,14 @@ export function collectTextParts(
   // Cleanup potential trailing empty breakLines
   while (parts.length > 0 && parts[parts.length - 1].options?.breakLine && parts[parts.length - 1].text === '') {
     parts.pop();
+  }
+
+  if (isRoot) {
+    const rootStyle = node.nodeType === 1 ? window.getComputedStyle(node) : parentStyle;
+    const whiteSpace = rootStyle?.whiteSpace || 'normal';
+    if (whiteSpace === 'normal' || whiteSpace === 'nowrap') {
+      normalizeCollapsibleTextPartBoundaries(parts);
+    }
   }
 
   return parts;
