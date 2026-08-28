@@ -32,6 +32,8 @@ import {
   detectVariantSlotCollisions,
   extractTableData,
   collectTextParts,
+  buildPseudoContentMap,
+  getResolvedPseudoContent,
   isInlineTextPseudoStyle,
   getNodeHyperlink,
 } from './utils.js';
@@ -421,6 +423,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   const renderQueue = [];
   const asyncTasks = []; // Queue for heavy operations (Images, Canvas)
   let domOrderCounter = 0;
+  const pseudoContentByNode = globalOptions.includePseudoElements === false ? null : buildPseudoContentMap(root);
 
   // Sync Traversal Function
   function collect(node, parentSortKey, parentOpacity = 1, inheritedAnimation = null) {
@@ -461,6 +464,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
       ? null
       : prepareRenderItem(node, { ...layoutConfig, root }, order, pptx, currentSortKey, nodeStyle, {
           ...globalOptions,
+          _pseudoContentByNode: pseudoContentByNode,
           _inheritedOpacity: parentOpacity,
           _inheritedAnimation: inheritedAnimation,
         });
@@ -1037,7 +1041,7 @@ function getPseudoElementRect(hostRect, pseudoStyle) {
 
 function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, domOrder, pptx, globalOptions = {}) {
   const pseudoStyle = window.getComputedStyle(node, pseudoType);
-  const content = pseudoStyle.content;
+  const content = getResolvedPseudoContent(node, pseudoType, globalOptions._pseudoContentByNode);
   const hasContent = content && content !== 'none' && content !== 'normal' && content !== '""';
 
   const bgColor = parseColor(pseudoStyle.backgroundColor);
@@ -1148,8 +1152,9 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
 
   // 3. Handle Text / Icon
   if (hasContent) {
-    const cleanText = content.replace(/^['"]|['"]$/g, '');
+    const cleanText = content;
     const textOpts = getTextStyle(pseudoStyle, scale, false);
+    const writingModeVert = getWritingModeVert(pseudoStyle.writingMode, pseudoStyle.textOrientation);
     const textOptions = {
       x,
       y,
@@ -1159,6 +1164,9 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
       valign: 'middle',
       margin: 0,
       wrap: true,
+      rotate: rotation,
+      vert: writingModeVert,
+      ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
       ...textOpts,
       ...(hasBg && { fill: { color: bgColor.hex, transparency: (1 - bgColor.opacity) * 100 } }),
       line: hasBorder ? { color: borderCol.hex, width: borderWidth * 0.75 * scale } : null,
@@ -1237,10 +1245,10 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   return { item: canvasItem, job: canvasJob };
 }
 
-function countParagraphs(node, scale) {
+function countParagraphs(node, scale, pseudoContentByNode = null) {
   if (!node) return 1;
   const style = window.getComputedStyle(node);
-  const parts = collectTextParts(node, style, scale, null, true, 1);
+  const parts = collectTextParts(node, style, scale, null, true, 1, pseudoContentByNode);
   let count = 1;
   for (const part of parts) {
     if (part.options?.breakLine) {
@@ -1398,7 +1406,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   if (effectiveAnim) {
     let numParagraphs = 1;
     if (isTextContainer(node)) {
-      numParagraphs = countParagraphs(node, config.scale);
+      numParagraphs = countParagraphs(node, config.scale, globalOptions._pseudoContentByNode);
     }
     globalOptions._animations = globalOptions._animations || [];
     globalOptions._animations.push({
@@ -1445,7 +1453,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     style.getPropertyValue('--pptx-shape');
 
   if ((node?.tagName || '').toLowerCase() === 'table') {
-    const tableData = extractTableData(node, config.scale);
+    const tableData = extractTableData(node, config.scale, globalOptions._pseudoContentByNode);
     const tableItems = [
       {
         type: 'table',
@@ -1598,7 +1606,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
 
       // 3. Extract Text Parts
-      const parts = collectTextParts(child, liStyle, config.scale);
+      const parts = collectTextParts(child, liStyle, config.scale, null, true, 1, globalOptions._pseudoContentByNode);
 
       // Browsers paint a list marker even when the list item has no text.
       // PptxGenJS still needs an empty run to own the paragraph bullet.
@@ -1971,7 +1979,15 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   const isText = !shadowSvg && isTextContainer(node);
 
   if (isText) {
-    const textParts = collectTextParts(node, style, config.scale, null, true, inheritedOpacity);
+    const textParts = collectTextParts(
+      node,
+      style,
+      config.scale,
+      null,
+      true,
+      inheritedOpacity,
+      globalOptions._pseudoContentByNode
+    );
 
     if (textParts.length > 0) {
       const isRtl = style.direction === 'rtl';

@@ -390,4 +390,147 @@ describe('getLaunchArgs', () => {
     const warningShape = xml.slice(xml.lastIndexOf('<p:sp>', warningIndex), xml.indexOf('</p:sp>', warningIndex));
     expect(warningShape).not.toContain('<a:t>!</a:t>');
   }, 40000);
+
+  it('preserves vertical transformed pseudo text', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+      <style>
+        body { margin: 0; }
+        .slide { width: 1920px; height: 1080px; position: relative; background: #fff; }
+        .axis {
+          position: absolute;
+          left: 220px;
+          top: 160px;
+          width: 640px;
+          height: 420px;
+        }
+        .axis::after {
+          content: "Kapazitaetswirkung";
+          position: absolute;
+          left: -48px;
+          top: 36px;
+          width: 20px;
+          height: 336px;
+          color: #14532d;
+          font: 700 18px/20px Arial;
+          writing-mode: vertical-rl;
+          transform: rotate(180deg);
+          transform-origin: center;
+        }
+      </style>
+      </head>
+      <body>
+        <div class="slide">
+          <div class="axis"></div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, includePseudoElements: true },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+    const axisTextIndex = xml.indexOf('<a:t>Kapazitaetswirkung</a:t>');
+    expect(axisTextIndex).toBeGreaterThan(-1);
+    const axisShape = xml.slice(xml.lastIndexOf('<p:sp>', axisTextIndex), xml.indexOf('</p:sp>', axisTextIndex));
+    expect(axisShape).toMatch(/<a:xfrm[^>]+rot="-?10800000"/);
+    expect(axisShape).toMatch(/<a:bodyPr[^>]+vert="eaVert"/);
+  }, 40000);
+
+  it('resolves scoped CSS counters in textual pseudo-content', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+      <style>
+        body { margin: 0; }
+        .slide { width: 1920px; height: 1080px; position: relative; background: #fff; }
+        .decisions {
+          position: absolute;
+          left: 980px;
+          top: 180px;
+          width: 600px;
+          counter-reset: decision;
+        }
+        .decision {
+          counter-increment: decision;
+          font: 400 30px/1.3 Arial;
+        }
+        .decision::before {
+          content: counter(decision) ". ";
+          font-weight: 700;
+        }
+      </style>
+      </head>
+      <body>
+        <div class="slide">
+          <div class="decisions">
+            <div class="decision">Rahmen beschliessen</div>
+            <div class="decision">Wirkung pruefen</div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, includePseudoElements: true },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+    expect(xml).not.toContain('counter(decision)');
+    expect(xml).toContain('<a:t>1. </a:t>');
+    expect(xml).toContain('<a:t>2. </a:t>');
+  }, 40000);
+
+  it('resolves nested counters with separators and counter styles', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+      <style>
+        body { margin: 0; }
+        .slide { width: 1920px; height: 1080px; position: relative; background: #fff; }
+        .outline { counter-reset: item; font: 400 30px/1.3 Arial; }
+        .branch { counter-increment: item; }
+        .branch::before { content: counter(item, upper-roman) ". "; font-weight: 700; }
+        .children { counter-reset: item; margin-left: 40px; }
+        .leaf { counter-increment: item; }
+        .leaf::before { content: counters(item, ".", upper-roman) " "; font-weight: 700; }
+      </style>
+      </head>
+      <body>
+        <div class="slide">
+          <div class="outline">
+            <div class="branch">Rahmen
+              <div class="children"><div class="leaf">Wirkung</div></div>
+            </div>
+            <div class="branch">Entscheidung</div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, includePseudoElements: true },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+    expect(xml).not.toContain('counter(');
+    expect(xml).not.toContain('counters(');
+    expect(xml).toContain('<a:t>I. </a:t>');
+    expect(xml).toContain('<a:t>I.I </a:t>');
+    expect(xml).toContain('<a:t>II. </a:t>');
+  }, 40000);
 });

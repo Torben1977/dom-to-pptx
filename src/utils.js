@@ -35,7 +35,7 @@ function getTableBorder(style, side, scale, node) {
 /**
  * Extracts native table data for PptxGenJS.
  */
-export function extractTableData(node, scale) {
+export function extractTableData(node, scale, pseudoContentByNode = null) {
   const rows = [];
   const colWidths = [];
 
@@ -191,7 +191,7 @@ export function extractTableData(node, scale) {
 
     cellList.forEach((cell) => {
       const style = window.getComputedStyle(cell);
-      const cellParts = collectTextParts(cell, style, scale);
+      const cellParts = collectTextParts(cell, style, scale, null, true, 1, pseudoContentByNode);
       // Fallback to plain text if collectTextParts returns empty/invalid
       const cellText = cellParts && cellParts.length > 0 ? cellParts : cell.innerText.replace(/[\n\r\t]+/g, ' ').trim();
 
@@ -1898,13 +1898,196 @@ function normalizeCollapsibleTextPartBoundaries(parts) {
   }
 }
 
+function parseCounterDirectives(value, defaultValue) {
+  const normalized = String(value || '').trim();
+  if (!normalized || normalized === 'none') return [];
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  const directives = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const name = tokens[index];
+    if (!/^[-_a-z][-_a-z0-9]*$/i.test(name)) continue;
+    const following = tokens[index + 1];
+    const hasExplicitValue = following !== undefined && /^-?\d+$/.test(following);
+    directives.push({ name, value: hasExplicitValue ? Number.parseInt(following, 10) : defaultValue });
+    if (hasExplicitValue) index++;
+  }
+  return directives;
+}
+
+function decodeCssString(value) {
+  return value
+    .replace(/\\([0-9a-f]{1,6})\s?/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/\\([\\"'])/g, '$1');
+}
+
+function alphaCounter(value, upper) {
+  if (value <= 0) return String(value);
+  let remaining = value;
+  let result = '';
+  while (remaining > 0) {
+    remaining--;
+    result = String.fromCharCode(97 + (remaining % 26)) + result;
+    remaining = Math.floor(remaining / 26);
+  }
+  return upper ? result.toUpperCase() : result;
+}
+
+function romanCounter(value, upper) {
+  if (value <= 0 || value >= 4000) return String(value);
+  const numerals = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
+    [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let remaining = value;
+  let result = '';
+  for (const [amount, glyph] of numerals) {
+    while (remaining >= amount) {
+      result += glyph;
+      remaining -= amount;
+    }
+  }
+  return upper ? result.toUpperCase() : result;
+}
+
+function formatCounter(value, style = 'decimal') {
+  const normalizedStyle = String(style || 'decimal').trim().toLowerCase();
+  if (normalizedStyle === 'decimal-leading-zero') {
+    return value >= 0 && value < 10 ? `0${value}` : String(value);
+  }
+  if (normalizedStyle === 'lower-alpha' || normalizedStyle === 'lower-latin') return alphaCounter(value, false);
+  if (normalizedStyle === 'upper-alpha' || normalizedStyle === 'upper-latin') return alphaCounter(value, true);
+  if (normalizedStyle === 'lower-roman') return romanCounter(value, false);
+  if (normalizedStyle === 'upper-roman') return romanCounter(value, true);
+  return String(value);
+}
+
+function unquoteCssString(value) {
+  const normalized = String(value || '').trim();
+  const quote = normalized[0];
+  if ((quote === '"' || quote === "'") && normalized.at(-1) === quote) {
+    return decodeCssString(normalized.slice(1, -1));
+  }
+  return decodeCssString(normalized);
+}
+
+function resolveGeneratedContent(value, counterStacks, node) {
+  let normalized = String(value || '').trim();
+  if (!normalized || normalized === 'none' || normalized === 'normal' || normalized === '""' || normalized === "''") {
+    return '';
+  }
+
+  normalized = normalized.replace(
+    /counters\(\s*([-_a-z][-_a-z0-9]*)\s*,\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*'))(?:\s*,\s*([-_a-z][-_a-z0-9]*))?\s*\)/gi,
+    (_match, name, separator, style) => {
+      const values = counterStacks.get(name) || [0];
+      return values.map((entry) => formatCounter(entry, style)).join(unquoteCssString(separator));
+    }
+  );
+  normalized = normalized.replace(
+    /counter\(\s*([-_a-z][-_a-z0-9]*)(?:\s*,\s*([-_a-z][-_a-z0-9]*))?\s*\)/gi,
+    (_match, name, style) => formatCounter(counterStacks.get(name)?.at(-1) ?? 0, style)
+  );
+  normalized = normalized.replace(
+    /attr\(\s*([-_a-z][-_a-z0-9]*)\s*\)/gi,
+    (_match, name) => node.getAttribute(name) || ''
+  );
+
+  const tokens = Array.from(normalized.matchAll(/"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^\s]+)/g));
+  return tokens
+    .map((token) => (token[1] ?? token[2]) === undefined ? token[3] : decodeCssString(token[1] ?? token[2]))
+    .join('');
+}
+
+function applyCounterStyle(style, counterStacks) {
+  const savedScopes = new Map();
+  const save = (name) => {
+    if (!savedScopes.has(name)) savedScopes.set(name, counterStacks.has(name) ? [...counterStacks.get(name)] : null);
+  };
+
+  for (const { name, value } of parseCounterDirectives(style.counterReset, 0)) {
+    save(name);
+    const stack = counterStacks.get(name) || [];
+    counterStacks.set(name, [...stack, value]);
+  }
+  for (const { name, value } of parseCounterDirectives(style.counterSet, 0)) {
+    if (!counterStacks.has(name)) save(name);
+    const stack = counterStacks.get(name) || [];
+    if (stack.length === 0) stack.push(value);
+    else stack[stack.length - 1] = value;
+    counterStacks.set(name, stack);
+  }
+  for (const { name, value } of parseCounterDirectives(style.counterIncrement, 1)) {
+    const stack = counterStacks.get(name) || [0];
+    stack[stack.length - 1] += value;
+    counterStacks.set(name, stack);
+  }
+
+  return () => {
+    for (const [name, previous] of savedScopes) {
+      if (previous === null) counterStacks.delete(name);
+      else counterStacks.set(name, previous);
+    }
+  };
+}
+
+/**
+ * Resolves generated textual content once in rendered DOM order. Chromium's
+ * getComputedStyle() preserves counter()/counters() expressions, so consumers
+ * must carry CSS counter state instead of exporting those expressions verbatim.
+ */
+export function buildPseudoContentMap(root) {
+  const resolved = new WeakMap();
+  const counters = new Map();
+
+  const resolvePseudo = (node, pseudoType) => {
+    const style = window.getComputedStyle(node, pseudoType);
+    const rawContent = String(style.content || '').trim();
+    const isGenerated =
+      style.display !== 'none' && rawContent && rawContent !== 'none' && rawContent !== 'normal';
+    if (!isGenerated) {
+      const entry = resolved.get(node) || {};
+      entry[pseudoType] = '';
+      resolved.set(node, entry);
+      return;
+    }
+    const restore = applyCounterStyle(style, counters);
+    const content = resolveGeneratedContent(rawContent, counters, node);
+    restore();
+    const entry = resolved.get(node) || {};
+    entry[pseudoType] = content;
+    resolved.set(node, entry);
+  };
+
+  const walk = (node) => {
+    if (!node || node.nodeType !== 1) return;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none') return;
+    const restore = applyCounterStyle(style, counters);
+    resolvePseudo(node, '::before');
+    for (const child of node.children) walk(child);
+    resolvePseudo(node, '::after');
+    restore();
+  };
+
+  walk(root);
+  return resolved;
+}
+
+export function getResolvedPseudoContent(node, pseudoType, pseudoContentByNode = null) {
+  const resolved = pseudoContentByNode?.get(node);
+  if (resolved && Object.prototype.hasOwnProperty.call(resolved, pseudoType)) return resolved[pseudoType];
+  return resolveGeneratedContent(window.getComputedStyle(node, pseudoType).content, new Map(), node);
+}
+
 export function collectTextParts(
   node,
   parentStyle,
   scale,
   activeHyperlink = null,
   isRoot = true,
-  inheritedOpacity = 1
+  inheritedOpacity = 1,
+  pseudoContentByNode = null
 ) {
   if (node.nodeType === 1 && isVisuallySuppressed(node)) return [];
 
@@ -1919,7 +2102,7 @@ export function collectTextParts(
   // Check for CSS Content (::before) - often used for icons
   if (node.nodeType === 1) {
     const beforeStyle = window.getComputedStyle(node, '::before');
-    const content = beforeStyle.content;
+    const content = getResolvedPseudoContent(node, '::before', pseudoContentByNode);
     if (
       content &&
       content !== 'none' &&
@@ -1927,8 +2110,7 @@ export function collectTextParts(
       content !== '""' &&
       isInlineTextPseudoStyle(beforeStyle)
     ) {
-      // Strip quotes
-      const cleanContent = content.replace(/^['"]|['"]$/g, '');
+      const cleanContent = content;
       if (cleanContent.trim()) {
         const textOpts = getTextStyle(beforeStyle, scale, false, inheritedOpacity);
         if (hyperlink) textOpts.hyperlink = hyperlink;
@@ -2059,7 +2241,15 @@ export function collectTextParts(
         const nodeOpacity = parseFloat(nodeStyle?.opacity);
         const childInheritedOpacity =
           inheritedOpacity * (Number.isNaN(nodeOpacity) ? 1 : Math.max(0, Math.min(1, nodeOpacity)));
-        const childParts = collectTextParts(child, parentStyle, scale, hyperlink, false, childInheritedOpacity);
+        const childParts = collectTextParts(
+          child,
+          parentStyle,
+          scale,
+          hyperlink,
+          false,
+          childInheritedOpacity,
+          pseudoContentByNode
+        );
         if (childParts.length > 0) parts.push(...childParts);
 
         if (isBlock) {
@@ -2073,7 +2263,7 @@ export function collectTextParts(
   // Check for CSS Content (::after) - often used for icons
   if (node.nodeType === 1) {
     const afterStyle = window.getComputedStyle(node, '::after');
-    const content = afterStyle.content;
+    const content = getResolvedPseudoContent(node, '::after', pseudoContentByNode);
     if (
       content &&
       content !== 'none' &&
@@ -2081,8 +2271,7 @@ export function collectTextParts(
       content !== '""' &&
       isInlineTextPseudoStyle(afterStyle)
     ) {
-      // Strip quotes
-      const cleanContent = content.replace(/^['"]|['"]$/g, '');
+      const cleanContent = content;
       if (cleanContent.trim()) {
         const textOpts = getTextStyle(afterStyle, scale, false, inheritedOpacity);
         if (hyperlink) textOpts.hyperlink = hyperlink;
