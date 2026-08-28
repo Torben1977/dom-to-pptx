@@ -374,6 +374,29 @@ function isTextContainerCached(node, cache) {
   return cache.get(node);
 }
 
+function alignmentKeyword(value) {
+  const keywords = String(value || '')
+    .trim()
+    .split(/\s+/);
+  return keywords[keywords.length - 1];
+}
+
+function horizontalTextAlignment(value) {
+  const keyword = alignmentKeyword(value);
+  if (keyword === 'center') return 'center';
+  if (['end', 'self-end', 'flex-end', 'right'].includes(keyword)) return 'right';
+  if (['start', 'self-start', 'flex-start', 'left'].includes(keyword)) return 'left';
+  return null;
+}
+
+function verticalTextAlignment(value) {
+  const keyword = alignmentKeyword(value);
+  if (keyword === 'center') return 'middle';
+  if (['end', 'self-end', 'flex-end'].includes(keyword)) return 'bottom';
+  if (['start', 'self-start', 'flex-start'].includes(keyword)) return 'top';
+  return null;
+}
+
 function compareKeys(keyA, keyB) {
   const len = Math.max(keyA.length, keyB.length);
   for (let i = 0; i < len; i++) {
@@ -1763,23 +1786,41 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       if (style.verticalAlign === 'bottom') valign = 'bottom';
 
       const isVertical = writingModeVert && writingModeVert !== 'none';
-      const isColumn = style.flexDirection === 'column' || style.flexDirection === 'column-reverse';
+      const isFlex = style.display.includes('flex');
+      const isGrid = style.display.includes('grid');
+      const isColumn = isFlex && (style.flexDirection === 'column' || style.flexDirection === 'column-reverse');
 
-      if (isVertical || isColumn) {
-        if (style.alignItems === 'center') align = 'center';
-        if (style.alignItems === 'flex-end' || style.alignItems === 'end') align = 'right';
+      // Anonymous text nodes participate as anonymous items in flex and grid containers. PowerPoint
+      // has no equivalent layout item, so project the computed CSS alignment axes onto the text box.
+      let layoutAlign = null;
+      let layoutValign = null;
+      if (isGrid) {
+        // For horizontal writing, Grid's inline axis is horizontal (`justify-items`) and its block
+        // axis is vertical (`align-items`). Vertical writing swaps those axes.
+        if (isVertical) {
+          layoutAlign = horizontalTextAlignment(style.alignItems);
+          layoutValign = verticalTextAlignment(style.justifyItems);
+        } else {
+          layoutAlign = horizontalTextAlignment(style.justifyItems);
+          layoutValign = verticalTextAlignment(style.alignItems);
+        }
+      } else if (isFlex) {
+        if (isVertical || isColumn) {
+          if (style.alignItems === 'center') layoutAlign = 'center';
+          if (style.alignItems === 'flex-end' || style.alignItems === 'end') layoutAlign = 'right';
 
-        if (style.justifyContent === 'center' && style.display.includes('flex')) valign = 'middle';
-        if (style.justifyContent === 'flex-end' && style.display.includes('flex')) valign = 'bottom';
-      } else {
-        if (style.alignItems === 'center') valign = 'middle';
-        if (style.alignItems === 'flex-end' || style.alignItems === 'end') valign = 'bottom';
+          if (style.justifyContent === 'center') layoutValign = 'middle';
+          if (style.justifyContent === 'flex-end') layoutValign = 'bottom';
+        } else {
+          if (style.alignItems === 'center') layoutValign = 'middle';
+          if (style.alignItems === 'flex-end' || style.alignItems === 'end') layoutValign = 'bottom';
 
-        if (style.justifyContent === 'center' && style.display.includes('flex')) align = 'center';
-        if (style.justifyContent === 'flex-end' || style.justifyContent === 'end') {
-          if (style.display.includes('flex')) align = 'right';
+          if (style.justifyContent === 'center') layoutAlign = 'center';
+          if (style.justifyContent === 'flex-end' || style.justifyContent === 'end') layoutAlign = 'right';
         }
       }
+      if (layoutAlign) align = layoutAlign;
+      if (layoutValign) valign = layoutValign;
 
       if (isVertical) {
         textParts.forEach((p) => {

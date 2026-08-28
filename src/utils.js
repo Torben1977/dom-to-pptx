@@ -651,9 +651,11 @@ export function isTextContainer(node) {
     const style = window.getComputedStyle(el);
     const display = style.display;
 
-    // Reject block displays and flex/grid items
-    const isBlockDisplay = display === 'block' || display === 'flex' || display === 'grid' || display === 'table';
-    if (isBlockDisplay) return false;
+    // Grid containers need their own render item even as `inline-grid`; folding them into the
+    // parent's text run would discard their internal layout and item alignment.
+    const isLayoutContainer =
+      display === 'block' || display === 'flex' || display.includes('grid') || display === 'table';
+    if (isLayoutContainer) return false;
 
     const parentStyle = el.parentElement ? window.getComputedStyle(el.parentElement) : null;
     const parentDisplay = parentStyle ? parentStyle.display : '';

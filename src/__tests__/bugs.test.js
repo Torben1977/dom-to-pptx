@@ -109,3 +109,64 @@ describe('Bug 3: No duplicate rendering of inline elements', () => {
     document.body.removeChild(container);
   });
 });
+
+describe('Grid text alignment', () => {
+  it.each([
+    ['grid', 'center', 'center', 'center', 'middle'],
+    ['grid', 'safe center', 'safe center', 'center', 'middle'],
+    ['inline-grid', 'end', 'end', 'right', 'bottom'],
+    ['grid', 'start', 'start', 'left', 'top'],
+  ])(
+    'maps %s justify-items:%s and align-items:%s onto PowerPoint text',
+    async (display, justifyItems, alignItems, expectedAlign, expectedValign) => {
+      mockAddText.mockClear();
+
+      const container = document.createElement('div');
+      container.className = 'slide';
+      container.style.width = '960px';
+      container.style.height = '540px';
+
+      const gridText = document.createElement('div');
+      gridText.textContent = 'Grid content';
+      gridText.style.display = display;
+      gridText.style.justifyItems = justifyItems;
+      gridText.style.alignItems = alignItems;
+      gridText.style.width = '180px';
+      gridText.style.height = '68px';
+      container.appendChild(gridText);
+      document.body.appendChild(container);
+
+      container.getBoundingClientRect = () => ({
+        width: 960,
+        height: 540,
+        left: 0,
+        top: 0,
+        right: 960,
+        bottom: 540,
+      });
+      gridText.getBoundingClientRect = () => ({
+        width: 180,
+        height: 68,
+        left: 30,
+        top: 30,
+        right: 210,
+        bottom: 98,
+      });
+
+      await exportToPptx(container, { skipDownload: true, skipNormalize: true });
+
+      const gridTextCall = mockAddText.mock.calls.find(
+        ([textParts]) =>
+          Array.isArray(textParts) &&
+          textParts
+            .map((part) => part.text)
+            .join('')
+            .trim() === 'Grid content'
+      );
+      expect(gridTextCall).toBeDefined();
+      expect(gridTextCall[1]).toMatchObject({ align: expectedAlign, valign: expectedValign });
+
+      document.body.removeChild(container);
+    }
+  );
+});
