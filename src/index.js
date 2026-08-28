@@ -115,6 +115,9 @@ export async function exportToPptx(target, options = {}) {
     ...options,
     _slideWidth: finalWidth,
     _slideHeight: finalHeight,
+    // Text-container classification is independent of the slide item being built. Cache it for
+    // this export because the traversal asks about the same parents repeatedly.
+    _textContainerCache: new WeakMap(),
   };
 
   const elements = Array.isArray(target) ? target : [target];
@@ -365,6 +368,12 @@ export async function exportToPptx(target, options = {}) {
  * @param {PptxGenJS.Slide} slide - The PPTX slide object to add content to.
  * @param {PptxGenJS} pptx - The main PPTX instance.
  */
+function isTextContainerCached(node, cache) {
+  if (!cache) return isTextContainer(node);
+  if (!cache.has(node)) cache.set(node, isTextContainer(node));
+  return cache.get(node);
+}
+
 function compareKeys(keyA, keyB) {
   const len = Math.max(keyA.length, keyB.length);
   for (let i = 0; i < len; i++) {
@@ -1138,7 +1147,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const parent = node.parentElement;
     if (!parent) return null;
 
-    if (isTextContainer(parent)) return null; // Parent handles it
+    if (isTextContainerCached(parent, globalOptions._textContainerCache)) return null; // Parent handles it
 
     const range = document.createRange();
     range.selectNode(node);
@@ -1201,7 +1210,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   // We should not render a separate shape/text box for it.
   let ancestor = node.parentElement;
   while (ancestor) {
-    if (isTextContainer(ancestor)) {
+    if (isTextContainerCached(ancestor, globalOptions._textContainerCache)) {
       return null;
     }
     ancestor = ancestor.parentElement;
@@ -1216,7 +1225,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     anim || (globalOptions._inheritedAnimation ? { ...globalOptions._inheritedAnimation, start: 'with' } : null);
   if (effectiveAnim) {
     let numParagraphs = 1;
-    if (isTextContainer(node)) {
+    if (isTextContainerCached(node, globalOptions._textContainerCache)) {
       numParagraphs = countParagraphs(node, config.scale);
     }
     globalOptions._animations = globalOptions._animations || [];
@@ -1657,7 +1666,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     borderTopLeftRadius !== borderBottomLeftRadius;
 
   const tempBg = parseColor(style.backgroundColor);
-  const isTxt = isTextContainer(node);
+  const isTxt = isTextContainerCached(node, globalOptions._textContainerCache);
   const hasContent = node.textContent.trim().length > 0 || node.children.length > 0;
 
   if (hasPartialBorderRadius && tempBg.hex && !isTxt && !hasContent && !customShapeName) {
@@ -1731,7 +1740,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   let textPayload = null;
-  const isText = isTextContainer(node);
+  const isText = isTextContainerCached(node, globalOptions._textContainerCache);
 
   if (isText) {
     const textParts = collectTextParts(node, style, config.scale, null, true, inheritedOpacity);
