@@ -1293,7 +1293,7 @@ function countParagraphs(node, scale) {
 }
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
-const TEXT_FIT_RESERVE_RATIO = 0.07;
+const TEXT_FIT_RESERVE_RATIO = 0.04;
 
 /**
  * Ask PowerPoint to shrink text only when the browser reports overflow or
