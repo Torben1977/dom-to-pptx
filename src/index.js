@@ -846,23 +846,89 @@ function getOpenShadowSvg(node) {
   if (!shadowRoot) return null;
 
   const nonVisualTags = new Set(['style', 'link', 'script', 'template']);
-  const visibleChildren = Array.from(shadowRoot.children).filter((child) => {
+  const visibleChildren = [];
+  for (const child of Array.from(shadowRoot.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      if (child.nodeValue?.trim()) return null;
+      continue;
+    }
+    if (child.nodeType === Node.COMMENT_NODE) continue;
+    if (child.nodeType !== Node.ELEMENT_NODE) return null;
+
     const tag = (child?.tagName || '').toLowerCase();
-    if (nonVisualTags.has(tag)) return false;
+    if (nonVisualTags.has(tag)) continue;
 
     const style = window.getComputedStyle(child);
     const opacity = parseFloat(style.opacity);
-    return (
+    const isVisible =
       style.display !== 'none' &&
       style.visibility !== 'hidden' &&
       style.visibility !== 'collapse' &&
-      (Number.isNaN(opacity) || opacity > 0)
-    );
-  });
+      (Number.isNaN(opacity) || opacity > 0);
+    if (isVisible) visibleChildren.push(child);
+  }
 
   if (visibleChildren.length !== 1) return null;
   const candidate = visibleChildren[0];
-  return (candidate?.tagName || '').toLowerCase() === 'svg' ? candidate : null;
+  if ((candidate?.tagName || '').toLowerCase() !== 'svg') return null;
+  // A slot nested inside an SVG (usually through foreignObject) makes the
+  // component depend on light-DOM content and therefore not SVG-only.
+  if (candidate.querySelector('slot')) return null;
+  return candidate;
+}
+
+/**
+ * Intersect an element with axis-aligned overflow clip boxes from its ancestors.
+ * Returns null when a transformed ancestor would require matrix-aware clipping.
+ */
+function getAxisAlignedOverflowClipRect(node, rect, root) {
+  let left = rect.left;
+  let top = rect.top;
+  let right = rect.right;
+  let bottom = rect.bottom;
+  let clipped = false;
+
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const parentStyle = window.getComputedStyle(parent);
+    if (parentStyle.transform && parentStyle.transform !== 'none') return null;
+
+    const clipsX = ['hidden', 'clip'].includes(parentStyle.overflowX || parentStyle.overflow);
+    const clipsY = ['hidden', 'clip'].includes(parentStyle.overflowY || parentStyle.overflow);
+    if (clipsX || clipsY) {
+      const parentRect = parent.getBoundingClientRect();
+      const clipLeft = parentRect.left + (parent.clientLeft || 0);
+      const clipTop = parentRect.top + (parent.clientTop || 0);
+      const clientWidth = parent.clientWidth || parentRect.width;
+      const clientHeight = parent.clientHeight || parentRect.height;
+      const clipRight = clipLeft + clientWidth;
+      const clipBottom = clipTop + clientHeight;
+
+      if (clipsX) {
+        const nextLeft = Math.max(left, clipLeft);
+        const nextRight = Math.min(right, clipRight);
+        clipped ||= nextLeft !== left || nextRight !== right;
+        left = nextLeft;
+        right = nextRight;
+      }
+      if (clipsY) {
+        const nextTop = Math.max(top, clipTop);
+        const nextBottom = Math.min(bottom, clipBottom);
+        clipped ||= nextTop !== top || nextBottom !== bottom;
+        top = nextTop;
+        bottom = nextBottom;
+      }
+    }
+
+    if (parent === root) break;
+  }
+
+  return {
+    clipped,
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
 }
 
 function getNodeSelector(node) {
@@ -1516,6 +1582,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       // 3. Extract Text Parts
       const parts = collectTextParts(child, liStyle, config.scale);
 
+      // Browsers paint a list marker even when the list item has no text.
+      // PptxGenJS still needs an empty run to own the paragraph bullet.
+      if (parts.length === 0 && bullet) {
+        parts.push({ text: '', options: { bullet } });
+      }
+
       if (parts.length > 0) {
         parts.forEach((p) => {
           if (!p.options) p.options = {};
@@ -1526,11 +1598,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           // A bullet is a paragraph property, not a rich-text run property.
           // Applying it to every run makes PptxGenJS emit duplicate a:pPr /
           // a:buChar nodes for one list item.
-          if (parts.length > 0) {
-            parts[0].options.bullet = bullet;
-          } else {
-            parts.push({ text: '', options: { bullet } });
-          }
+          parts[0].options.bullet = bullet;
         }
 
         // B. Apply Spacing
@@ -1684,19 +1752,33 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   // deliberately left to an explicit future fallback so semantic content is
   // never flattened by merely using a hyphenated custom-element tag.
   const shadowSvg = getOpenShadowSvg(node);
+  let shadowJob = null;
   if (shadowSvg) {
     const title = shadowSvg.querySelector('title')?.textContent?.trim();
     const altText = node.getAttribute('aria-label') || title || undefined;
+    const shadowRect = shadowSvg.getBoundingClientRect();
+    const shadowStyle = window.getComputedStyle(shadowSvg);
+    const shadowRotation = getRotation(shadowStyle.transform);
+    const useRenderedShadowRect =
+      rotation === 0 && shadowRotation === 0 && shadowRect.width > 0 && shadowRect.height > 0;
+    const shadowWidthPx = useRenderedShadowRect ? shadowRect.width : widthPx;
+    const shadowHeightPx = useRenderedShadowRect ? shadowRect.height : heightPx;
+    const shadowX = useRenderedShadowRect
+      ? config.offX + (shadowRect.left - config.rootX) * PX_TO_INCH * config.scale
+      : x;
+    const shadowY = useRenderedShadowRect
+      ? config.offY + (shadowRect.top - config.rootY) * PX_TO_INCH * config.scale
+      : y;
     const item = {
       type: 'image',
       zIndex: parentSortKey.concat([0, -1]),
       domOrder,
       options: {
         data: null,
-        x,
-        y,
-        w,
-        h,
+        x: shadowX,
+        y: shadowY,
+        w: shadowWidthPx * PX_TO_INCH * config.scale,
+        h: shadowHeightPx * PX_TO_INCH * config.scale,
         rotate: rotation,
         ...pictureTransparency(safeOpacity),
         ...(hyperlink && { hyperlink }),
@@ -1704,13 +1786,13 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       },
     };
 
-    const job = async () => {
-      const processed = await svgToSvg(shadowSvg, { width: widthPx, height: heightPx });
+    shadowJob = async () => {
+      const processed = await svgToSvg(shadowSvg, { width: shadowWidthPx, height: shadowHeightPx });
       if (processed) item.options.data = processed;
       else item.skip = true;
     };
 
-    return { items: [item], job, stopRecursion: true };
+    items.push(item);
   }
 
   // --- ASYNC JOB: SVG Tags ---
@@ -1886,7 +1968,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   let textPayload = null;
-  const isText = isTextContainerCached(node, globalOptions._textContainerCache);
+  const isText = !shadowSvg && isTextContainerCached(node, globalOptions._textContainerCache);
 
   if (isText) {
     const textParts = collectTextParts(node, style, config.scale, null, true, inheritedOpacity);
@@ -1969,6 +2051,36 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       ];
 
       textPayload = { text: textParts, align, valign, margin, rtlMode: isRtl };
+    }
+  }
+
+  // A solid, empty box can be clipped by shrinking its editable rectangle.
+  // Media and text require crop/mask semantics rather than resizing, and are
+  // deliberately left to the broader clipping implementation.
+  const canUseRectangularOverflowClip =
+    rotation === 0 &&
+    !textPayload &&
+    node.children.length === 0 &&
+    !node.textContent.trim() &&
+    bgColorObj.hex &&
+    bgColorObj.opacity > 0 &&
+    !hasGradient &&
+    !hasBgImgUrl &&
+    !hasBorder &&
+    !hasShadow &&
+    !softEdge &&
+    !customShapeName &&
+    !borderRadiusValue;
+  if (canUseRectangularOverflowClip) {
+    const clippedRect = getAxisAlignedOverflowClipRect(node, rect, config.root);
+    if (clippedRect?.clipped) {
+      if (clippedRect.width < 0.5 || clippedRect.height < 0.5) {
+        return { items, job: shadowJob, stopRecursion: true };
+      }
+      x = config.offX + (clippedRect.left - config.rootX) * PX_TO_INCH * config.scale;
+      y = config.offY + (clippedRect.top - config.rootY) * PX_TO_INCH * config.scale;
+      w = clippedRect.width * PX_TO_INCH * config.scale;
+      h = clippedRect.height * PX_TO_INCH * config.scale;
     }
   }
 
@@ -2102,13 +2214,26 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const transparency = (1 - finalAlpha) * 100;
     const useSolidFill = (bgColorObj.hex && !isImageWrapper) || customShapeName;
 
-    if (hasPartialBorderRadius && useSolidFill && !textPayload && !customShapeName) {
-      const shapeSvg = generateCustomShapeSVG(widthPx, heightPx, bgColorObj.hex, bgColorObj.opacity, {
-        tl: parseFloat(style.borderTopLeftRadius) || 0,
-        tr: parseFloat(style.borderTopRightRadius) || 0,
-        br: parseFloat(style.borderBottomRightRadius) || 0,
-        bl: parseFloat(style.borderBottomLeftRadius) || 0,
-      });
+    if (hasPartialBorderRadius && useSolidFill && !customShapeName) {
+      const shapeSvg = generateCustomShapeSVG(
+        widthPx,
+        heightPx,
+        bgColorObj.hex,
+        bgColorObj.opacity,
+        {
+          tl: parseFloat(style.borderTopLeftRadius) || 0,
+          tr: parseFloat(style.borderTopRightRadius) || 0,
+          br: parseFloat(style.borderBottomRightRadius) || 0,
+          bl: parseFloat(style.borderBottomLeftRadius) || 0,
+        },
+        hasUniformBorder
+          ? {
+              color: borderColorObj.hex,
+              width: borderWidth,
+              opacity: borderColorObj.opacity,
+            }
+          : null
+      );
 
       items.push({
         type: 'image',
@@ -2123,8 +2248,33 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           rotate: rotation,
           ...pictureTransparency(safeOpacity),
           ...(hyperlink && { hyperlink }),
+          ...(hasShadow && { shadow: getVisibleShadow(shadowStr, config.scale) }),
         },
       });
+
+      if (textPayload) {
+        items.push({
+          type: 'text',
+          zIndex: parentSortKey.concat([0, -1]),
+          domOrder,
+          textParts: textPayload.text,
+          options: {
+            x,
+            y,
+            w,
+            h,
+            rotate: rotation,
+            align: textPayload.align,
+            valign: textPayload.valign,
+            margin: textPayload.margin,
+            ...(textPayload.rtlMode && { rtlMode: true }),
+            wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+            fit: 'shrink',
+            vert: writingModeVert,
+            ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
+          },
+        });
+      }
     } else {
       const shapeOpts = {
         x,
@@ -2281,14 +2431,15 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   const combinedJob =
-    bgJob || pseudoJobs.length > 0
+    shadowJob || bgJob || pseudoJobs.length > 0
       ? async () => {
+          if (shadowJob) await shadowJob();
           if (bgJob) await bgJob();
           for (const j of pseudoJobs) await j();
         }
       : null;
 
-  return { items, job: combinedJob, stopRecursion: !!textPayload };
+  return { items, job: combinedJob, stopRecursion: !!textPayload || !!shadowSvg };
 }
 
 function isComplexHierarchy(root) {

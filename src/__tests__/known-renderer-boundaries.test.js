@@ -94,6 +94,20 @@ const html = `
           width: 120px;
           height: 120px;
         }
+        x-decorated-icon,
+        x-mixed-icon {
+          position: absolute;
+          left: 120px;
+          top: 100px;
+          display: block;
+          width: 120px;
+          height: 120px;
+        }
+        x-decorated-icon {
+          padding: 20px;
+          background: #fee2e2;
+          border: 4px solid #b91c1c;
+        }
       </style>
     </head>
     <body>
@@ -164,6 +178,14 @@ const html = `
         </table>
       </section>
 
+      <section class="slide">
+        <x-decorated-icon></x-decorated-icon>
+      </section>
+
+      <section class="slide">
+        <x-mixed-icon></x-mixed-icon>
+      </section>
+
       <script>
         customElements.define(
           'x-status-icon',
@@ -174,6 +196,31 @@ const html = `
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">' +
                 '<circle cx="60" cy="60" r="54" fill="#0f766e" />' +
                 '<path d="M32 62l18 18 38-42" fill="none" stroke="#fff" stroke-width="12" />' +
+                '</svg>';
+            }
+          }
+        );
+        customElements.define(
+          'x-decorated-icon',
+          class extends HTMLElement {
+            connectedCallback() {
+              const shadow = this.attachShadow({ mode: 'open' });
+              shadow.innerHTML =
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72">' +
+                '<circle cx="36" cy="36" r="32" fill="#0f766e" />' +
+                '</svg>';
+            }
+          }
+        );
+        customElements.define(
+          'x-mixed-icon',
+          class extends HTMLElement {
+            connectedCallback() {
+              const shadow = this.attachShadow({ mode: 'open' });
+              shadow.innerHTML =
+                'VISIBLE_SHADOW_TEXT' +
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">' +
+                '<circle cx="60" cy="60" r="54" fill="#0f766e" />' +
                 '</svg>';
             }
           }
@@ -256,7 +303,7 @@ describe('known renderer boundaries', () => {
     expect(shapeWithFill(documentNode, 'D92D20')).toBeDefined();
   });
 
-  it.fails('clips an overflowing child to the geometry of its overflow-hidden ancestor', async () => {
+  it('clips an overflowing child to the geometry of its overflow-hidden ancestor', async () => {
     const documentNode = await slideDocument(2);
     const child = shapeWithFill(documentNode, 'D92D20');
 
@@ -312,7 +359,7 @@ describe('known renderer boundaries', () => {
     expect(gridWidths).toEqual([100 * EMU_PER_PX, 200 * EMU_PER_PX, 300 * EMU_PER_PX]);
   });
 
-  it.fails('preserves asymmetric corner radii when the same element also owns editable text', async () => {
+  it('preserves asymmetric corner radii when the same element also owns editable text', async () => {
     const documentNode = await slideDocument(5);
     const textShape = drawingShapes(documentNode).find((shape) =>
       Array.from(shape.getElementsByTagName('a:t')).some((node) => node.textContent === 'ASYMMETRIC_CARD')
@@ -369,6 +416,42 @@ describe('known renderer boundaries', () => {
         }),
       ])
     );
+  });
+
+  it('preserves a decorated Shadow-DOM host and places its SVG in the rendered content box', async () => {
+    const documentNode = await slideDocument(10);
+    const hostShape = shapeWithFill(documentNode, 'FEE2E2');
+    expect(hostShape).toBeDefined();
+    expect(transformOf(hostShape)).toMatchObject({
+      x: 120 * EMU_PER_PX,
+      y: 100 * EMU_PER_PX,
+      w: 120 * EMU_PER_PX,
+      h: 120 * EMU_PER_PX,
+    });
+
+    const vectorPicture = Array.from(documentNode.getElementsByTagName('p:pic')).find(
+      (picture) => picture.getElementsByTagName('asvg:svgBlip').length === 1
+    );
+    expect(vectorPicture).toBeDefined();
+    const transform = vectorPicture.getElementsByTagName('a:xfrm')[0];
+    const offset = transform.getElementsByTagName('a:off')[0];
+    const extent = transform.getElementsByTagName('a:ext')[0];
+    expect({
+      x: Number(offset.getAttribute('x')),
+      y: Number(offset.getAttribute('y')),
+      w: Number(extent.getAttribute('cx')),
+      h: Number(extent.getAttribute('cy')),
+    }).toEqual({
+      x: 144 * EMU_PER_PX,
+      y: 124 * EMU_PER_PX,
+      w: 72 * EMU_PER_PX,
+      h: 72 * EMU_PER_PX,
+    });
+  });
+
+  it('does not classify visible Shadow-DOM text plus an SVG as SVG-only', async () => {
+    const documentNode = await slideDocument(11);
+    expect(documentNode.getElementsByTagName('asvg:svgBlip')).toHaveLength(0);
   });
 
   it('completes a partial colgroup with the browser-measured implicit columns', async () => {

@@ -218,7 +218,7 @@ describe('list text insets', () => {
     expect(documentNode.getElementsByTagName('p:spTree')).toHaveLength(1);
   });
 
-  it.fails('preserves the browser-visible marker of an empty list item', async () => {
+  it('preserves the browser-visible marker of an empty list item', async () => {
     const documentNode = await emptyListDocument();
     const bulletParagraphs = Array.from(documentNode.getElementsByTagName('a:p')).filter(
       (paragraph) => paragraph.getElementsByTagName('a:buChar').length === 1
