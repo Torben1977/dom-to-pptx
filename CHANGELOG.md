@@ -11,6 +11,9 @@ All notable changes to this project will be documented in this file.
 - Restored asymmetric CSS borders on gradient-backed elements by emitting their border shapes into the PowerPoint render queue.
 - Added fail-closed font embedding for callers that require exact embedded font variants.
 - Preserved SVG-only visual Web Components with open Shadow Roots as vector pictures instead of dropping their rendered content.
+- Preserved decorated Shadow-DOM hosts while positioning their vector SVG content at its browser-rendered geometry.
+- Preserved empty list-item markers, asymmetric rounded-card geometry with editable text, and axis-aligned clipping for empty solid boxes.
+- Preserved authored font sizes for browser-fitting text boxes while retaining PowerPoint autofit for measured overflow risk.
 
 ## [2.1.1] - 2026-07-21
 
@@ -79,7 +82,6 @@ All notable changes to this project will be documented in this file.
   * `npx dom-to-pptx-exporter`
 
 ### Fixed
-
 - **Wipe Exit Preview Directions**: Resolved swapped `@keyframes` for exit directions (`wipe-out-to-left`, `wipe-out-to-right`, `wipe-out-to-up`, and `wipe-out-to-down`) in `animations.css` to accurately preview exit animations in-browser.
 - **Animation Timing Fallbacks**: Standardized default fallback animation durations in `css-parser.js` to `1000ms` (1.0s) and `animations.css` to `500ms` (0.5s) to match native PowerPoint default timings.
 
@@ -104,6 +106,7 @@ All notable changes to this project will be documented in this file.
 - **Formatting, Linting & Style Audit**: Added `.editorconfig`, `.vscode/settings.json`, and `.markdownlint.json`. Enhanced ESLint config to use `@eslint/markdown` for linting code blocks inside `.md` documentation.
 
 ### Fixed
+
 - **`white-space: pre` / `pre-wrap` / `pre-line` newline preservation**: Fixed a bug where newlines/tabs inside `<pre>` or custom preformatted containers collapsed into a space. Indentation, tabs, and line breaks are now accurately preserved.
 - **PowerPoint XML Corruption & Warnings**: Resolved slide repair errors in PowerPoint by wrapping modern transitions in `AlternateContent` compatibility fallbacks, registering namespaces correctly, and enforcing bullet property exclusivity.
 

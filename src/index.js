@@ -1250,6 +1250,65 @@ function countParagraphs(node, scale) {
   return count;
 }
 
+const TEXT_FIT_TOLERANCE_PX = 0.5;
+const TEXT_FIT_RESERVE_RATIO = 0.07;
+
+/**
+ * Ask PowerPoint to shrink text only when the browser reports overflow or
+ * less than the agreed safety reserve. Browser-fit text otherwise keeps its
+ * authored font sizes; unconditional normAutofit lets Office silently reduce
+ * mixed text runs because its line metrics differ from Chromium's.
+ */
+function getPowerPointTextFit(node, style) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const rect = node.getBoundingClientRect();
+  const fallbackClientWidth = Math.max(
+    0,
+    rect.width - (parseFloat(style.borderLeftWidth) || 0) - (parseFloat(style.borderRightWidth) || 0)
+  );
+  const fallbackClientHeight = Math.max(
+    0,
+    rect.height - (parseFloat(style.borderTopWidth) || 0) - (parseFloat(style.borderBottomWidth) || 0)
+  );
+  const clientWidth = node.clientWidth || fallbackClientWidth;
+  const clientHeight = node.clientHeight || fallbackClientHeight;
+  const scrollWidth = node.scrollWidth || clientWidth;
+  const scrollHeight = node.scrollHeight || clientHeight;
+
+  if (scrollWidth > clientWidth + TEXT_FIT_TOLERANCE_PX || scrollHeight > clientHeight + TEXT_FIT_TOLERANCE_PX) {
+    return 'shrink';
+  }
+
+  if (clientWidth <= 0 || clientHeight <= 0) return 'shrink';
+
+  try {
+    const range = node.ownerDocument.createRange();
+    range.selectNodeContents(node);
+    const lineRects = Array.from(range.getClientRects()).filter(
+      (lineRect) => lineRect.width > 0 && lineRect.height > 0
+    );
+    const contentRect = range.getBoundingClientRect();
+    range.detach();
+
+    const contentHeight = contentRect.height || 0;
+    const widestLine = lineRects.reduce((maximum, lineRect) => Math.max(maximum, lineRect.width), 0);
+    const reserveFactor = 1 - TEXT_FIT_RESERVE_RATIO;
+    // Range geometry is already laid out inside the browser's padded client
+    // box. Subtracting CSS padding here a second time would classify visually
+    // fitting padded pills/cards as overflow and re-enable destructive Office
+    // autofit. scrollWidth/scrollHeight above remain the hard overflow signal.
+    const verticalRisk = contentHeight > 0 && contentHeight > clientHeight * reserveFactor;
+    const nowrap = style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre';
+    const horizontalRisk = nowrap && widestLine > 0 && widestLine > clientWidth * reserveFactor;
+    return verticalRisk || horizontalRisk ? 'shrink' : null;
+  } catch {
+    // If a DOM implementation cannot provide line boxes, the already checked
+    // scroll geometry remains the authoritative signal. Do not invent shrink.
+    return null;
+  }
+}
+
 function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, computedStyle, globalOptions = {}) {
   // 1. Text Node Handling
   if (node.nodeType === 3) {
@@ -1285,6 +1344,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
     }
 
+    const textFit = getPowerPointTextFit(parent, style);
     return {
       items: [
         {
@@ -1306,7 +1366,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             w: unrotatedW,
             h: unrotatedH,
             margin: 0,
-            fit: 'shrink',
+            ...(textFit && { fit: textFit }),
             wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
           },
         },
@@ -1646,6 +1706,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         });
       }
 
+      const textFit = getPowerPointTextFit(node, style);
       items.push({
         type: 'text',
         zIndex: parentSortKey.concat([0, -1]),
@@ -1660,7 +1721,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           valign: 'top',
           // CSS padding applied as PPTX text box insets, in points
           margin: listMargin,
-          fit: 'shrink',
+          ...(textFit && { fit: textFit }),
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
@@ -1982,7 +2043,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         padding[0] * 72, // top
       ];
 
-      textPayload = { text: textParts, align, valign, margin, rtlMode: isRtl };
+      textPayload = {
+        text: textParts,
+        align,
+        valign,
+        margin,
+        rtlMode: isRtl,
+        fit: getPowerPointTextFit(node, style),
+      };
     }
   }
 
@@ -2115,7 +2183,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           margin: textPayload.margin,
           ...(textPayload.rtlMode && { rtlMode: true }),
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-          fit: 'shrink',
+          ...(textPayload.fit && { fit: textPayload.fit }),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
         },
@@ -2201,7 +2269,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             margin: textPayload.margin,
             ...(textPayload.rtlMode && { rtlMode: true }),
             wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-            fit: 'shrink',
+            ...(textPayload.fit && { fit: textPayload.fit }),
             vert: writingModeVert,
             ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
           },
@@ -2280,7 +2348,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             margin: textPayload.margin,
             ...(textPayload.rtlMode && { rtlMode: true }),
             wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-            fit: 'shrink',
+            ...(textPayload.fit && { fit: textPayload.fit }),
             vert: writingModeVert,
             ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
           },
@@ -2297,7 +2365,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           margin: textPayload.margin,
           ...(textPayload.rtlMode && { rtlMode: true }),
           wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
-          fit: 'shrink',
+          ...(textPayload.fit && { fit: textPayload.fit }),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
         };
