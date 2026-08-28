@@ -381,19 +381,29 @@ function alignmentKeyword(value) {
   return keywords[keywords.length - 1];
 }
 
-function horizontalTextAlignment(value) {
+function oppositeEdge(edge) {
+  return { left: 'right', right: 'left', top: 'bottom', bottom: 'top' }[edge];
+}
+
+function horizontalTextAlignment(value, startEdge = 'left') {
   const keyword = alignmentKeyword(value);
   if (keyword === 'center') return 'center';
-  if (['end', 'self-end', 'flex-end', 'right'].includes(keyword)) return 'right';
-  if (['start', 'self-start', 'flex-start', 'left'].includes(keyword)) return 'left';
+  if (keyword === 'right') return 'right';
+  if (keyword === 'left') return 'left';
+  if (['end', 'self-end', 'flex-end'].includes(keyword)) return oppositeEdge(startEdge);
+  if (['start', 'self-start', 'flex-start'].includes(keyword)) return startEdge;
   return null;
 }
 
-function verticalTextAlignment(value) {
+function verticalTextAlignment(value, startEdge = 'top') {
   const keyword = alignmentKeyword(value);
   if (keyword === 'center') return 'middle';
-  if (['end', 'self-end', 'flex-end'].includes(keyword)) return 'bottom';
-  if (['start', 'self-start', 'flex-start'].includes(keyword)) return 'top';
+  // CSS left/right alignment falls back to logical start when the axis is vertical.
+  if (keyword === 'left' || keyword === 'right') return startEdge === 'bottom' ? 'bottom' : 'top';
+  if (['end', 'self-end', 'flex-end'].includes(keyword)) {
+    return oppositeEdge(startEdge) === 'bottom' ? 'bottom' : 'top';
+  }
+  if (['start', 'self-start', 'flex-start'].includes(keyword)) return startEdge === 'bottom' ? 'bottom' : 'top';
   return null;
 }
 
@@ -1795,14 +1805,24 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       let layoutAlign = null;
       let layoutValign = null;
       if (isGrid) {
+        const inlineStart = isVertical
+          ? style.direction === 'rtl'
+            ? 'bottom'
+            : 'top'
+          : style.direction === 'rtl'
+            ? 'right'
+            : 'left';
+        const blockStart = isVertical ? (style.writingMode.endsWith('-rl') ? 'right' : 'left') : 'top';
+
         // For horizontal writing, Grid's inline axis is horizontal (`justify-items`) and its block
-        // axis is vertical (`align-items`). Vertical writing swaps those axes.
+        // axis is vertical (`align-items`). Vertical writing swaps those axes. Logical start/end
+        // follow writing-mode on the block axis and direction on the inline axis.
         if (isVertical) {
-          layoutAlign = horizontalTextAlignment(style.alignItems);
-          layoutValign = verticalTextAlignment(style.justifyItems);
+          layoutAlign = horizontalTextAlignment(style.alignItems, blockStart);
+          layoutValign = verticalTextAlignment(style.justifyItems, inlineStart);
         } else {
-          layoutAlign = horizontalTextAlignment(style.justifyItems);
-          layoutValign = verticalTextAlignment(style.alignItems);
+          layoutAlign = horizontalTextAlignment(style.justifyItems, inlineStart);
+          layoutValign = verticalTextAlignment(style.alignItems, blockStart);
         }
       } else if (isFlex) {
         if (isVertical || isColumn) {

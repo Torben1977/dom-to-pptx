@@ -112,13 +112,21 @@ describe('Bug 3: No duplicate rendering of inline elements', () => {
 
 describe('Grid text alignment', () => {
   it.each([
-    ['grid', 'center', 'center', 'center', 'middle'],
-    ['grid', 'safe center', 'safe center', 'center', 'middle'],
-    ['inline-grid', 'end', 'end', 'right', 'bottom'],
-    ['grid', 'start', 'start', 'left', 'top'],
+    ['grid', 'center', 'center', 'ltr', 'horizontal-tb', 'center', 'middle'],
+    ['grid', 'safe center', 'safe center', 'ltr', 'horizontal-tb', 'center', 'middle'],
+    ['inline-grid', 'end', 'end', 'ltr', 'horizontal-tb', 'right', 'bottom'],
+    ['grid', 'start', 'start', 'ltr', 'horizontal-tb', 'left', 'top'],
+    ['grid', 'start', 'start', 'rtl', 'horizontal-tb', 'right', 'top'],
+    ['grid', 'end', 'end', 'rtl', 'horizontal-tb', 'left', 'bottom'],
+    ['grid', 'left', 'start', 'rtl', 'horizontal-tb', 'left', 'top'],
+    ['grid', 'right', 'end', 'rtl', 'horizontal-tb', 'right', 'bottom'],
+    ['grid', 'start', 'start', 'ltr', 'vertical-rl', 'right', 'top'],
+    ['grid', 'end', 'end', 'rtl', 'vertical-lr', 'right', 'top'],
+    ['grid', 'left', 'start', 'rtl', 'vertical-rl', 'right', 'bottom'],
+    ['grid', 'right', 'end', 'ltr', 'vertical-lr', 'right', 'top'],
   ])(
-    'maps %s justify-items:%s and align-items:%s onto PowerPoint text',
-    async (display, justifyItems, alignItems, expectedAlign, expectedValign) => {
+    'maps %s justify-items:%s and align-items:%s (%s, %s) onto PowerPoint text',
+    async (display, justifyItems, alignItems, direction, writingMode, expectedAlign, expectedValign) => {
       mockAddText.mockClear();
 
       const container = document.createElement('div');
@@ -131,6 +139,8 @@ describe('Grid text alignment', () => {
       gridText.style.display = display;
       gridText.style.justifyItems = justifyItems;
       gridText.style.alignItems = alignItems;
+      gridText.style.direction = direction;
+      gridText.style.writingMode = writingMode;
       gridText.style.width = '180px';
       gridText.style.height = '68px';
       container.appendChild(gridText);
