@@ -313,7 +313,7 @@ describe('known renderer boundaries', () => {
     expect(shapeWithFill(documentNode, '2563EB')).toBeDefined();
   });
 
-  it.fails('preserves CSS paint order across wrappers that do not create stacking contexts', async () => {
+  it('preserves CSS paint order across wrappers that do not create stacking contexts', async () => {
     const documentNode = await slideDocument(1);
     const shapes = drawingShapes(documentNode);
     const red = shapeWithFill(documentNode, 'D92D20');

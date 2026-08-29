@@ -2,7 +2,36 @@
 
 This document lists the common CSS features, Tailwind-like utility classes, and HTML elements that dom-to-pptx understands and maps to PowerPoint shapes/text.
 
-Note: The library measures computed layout from the browser (getBoundingClientRect) and maps positions/sizes precisely to PPTX inches. If a CSS feature is not listed below it may still work because the browser computes layout and visual styles — the mapping focuses on visual fidelity.
+The browser is the layout authority, but PowerPoint is not a browser. A computed
+browser rectangle alone is not sufficient for every CSS construct: flowing text,
+clipping, transforms, and paint order may require several PowerPoint objects or a
+fidelity fallback. The converter therefore has three explicit support levels:
+
+1. **Native and editable:** text, common boxes, basic borders, simple images/SVG,
+   and fixed flex/grid layouts are mapped to editable PowerPoint objects.
+2. **Fidelity fallback:** a visual subtree may be emitted as vector or raster media
+   when PowerPoint has no equivalent editable primitive.
+3. **Unsupported boundary:** constructs that cannot be represented reliably are
+   documented and covered by executable expected-failure tests. They must not be
+   assumed to work merely because the browser renders them.
+
+`exportToPptx(..., { boundaryPolicy })` makes that distinction executable:
+
+- `ignore` keeps the best-effort editable mapper and is the default;
+- `error` rejects unsupported conversion boundaries with a structured
+  `DOM_TO_PPTX_UNSUPPORTED_BOUNDARY` finding. Use this for controlled presentation
+  HTML so the authoring layer can repair the source;
+- `rasterize` replaces only the smallest affected unsupported subtree with a PNG.
+  Use this fidelity fallback for external HTML when visual preservation matters
+  more than editability of that subtree.
+
+Simple axis-aligned clipping of an empty solid rectangle remains native and
+editable in every mode.
+
+Simple CSS multi-column regions remain editable when each direct block occupies
+one browser column. Browser-balanced direct text or a block fragmented across
+columns is rejected in `error` mode and isolated as one raster subtree in
+`rasterize` mode.
 
 ## Supported HTML elements
 
@@ -26,6 +55,10 @@ Note: The library measures computed layout from the browser (getBoundingClientRe
 - backdrop-filter: blur() (simulated via html2canvas snapshot)
 - transform: rotate() (extraction of rotation angle)
 - display, position, width, height, padding, margin
+- CSS stacking contexts and `z-index` paint order for positioned elements,
+  flex/grid items, opacity, and transformed wrappers
+- simple left/right sibling floats when all affected text lines share one
+  rectangular line region
 - text-align, vertical-align, text-transform
 - white-space (`normal`/`nowrap` collapse whitespace; `pre`/`pre-wrap`/`pre-line` preserve author line breaks, and `pre`/`pre-wrap` also preserve indentation/spaces)
 - font-family, font-size, font-weight, font-style, line-height
@@ -57,9 +90,35 @@ To achieve the highest fidelity and most reliable rendering in PowerPoint, consi
 
 - **Layouts (Tables vs. Grid/Flex):** While native HTML `<table>` elements are supported (mapping to PptxGenJS native tables), native tables in PowerPoint can be structurally rigid. For absolute layout control, perfect border-radius, and guaranteed visual consistency, **prefer utilizing a `div` structure with `display: grid` or `display: flex`**. These containers dynamically transform into crisp, independent PowerPoint shapes.
 - **Images and Backgrounds:**
-  - `<img src="...">` tags are fully supported and mapped perfectly, taking `object-fit` and `object-position` into consideration.
+  - `<img src="...">` tags support the common `object-fit` and
+    `object-position` cases. Complex crop/radius combinations require the media
+    fidelity tests and are not described as pixel-perfect by default.
   - CSS `background-image: url(...)` is also natively parsed. It correctly handles `background-size` (cover/contain) and translates them into matching image crop parameters in PPTX.
   - CSS `background-image: linear-gradient(...)` transforms into pure vector SVG gradients without requiring rasterization.
 - **Writing Modes:** Modern CSS `writing-mode` (`vertical-rl`, `vertical-lr`) properties are supported. Combine them with `text-orientation: upright` to natively tap into PowerPoint's Stacked Vertical Text engine, or leave defaults to map to standard East-Asian rotated text layouts.
 
 If a style or element is critical and you find it not behaving as expected, open an issue with a minimal repro and I'll add support or provide a workaround.
+
+## Known renderer boundaries
+
+The following browser constructs are deliberately tracked as renderer boundaries
+instead of being hidden behind slide-specific repairs:
+
+- text that first flows beside a float and then continues below it (a
+  non-rectangular line region);
+- `overflow: hidden` / `clip` for editable text, media, or transformed children
+  under the default best-effort mapper. Select `boundaryPolicy: error` or
+  `boundaryPolicy: rasterize` to make this boundary explicit;
+- cumulative ancestor transforms, non-default `transform-origin`, scale, skew,
+  and perspective;
+- mixed Shadow-DOM content containing both editable text and visual elements;
+- nested lists, advanced list markers, and arbitrary CSS counters;
+- browser-balanced or fragmented CSS multi-column layout, `shape-outside`,
+  masks, and complex `clip-path`;
+- blend modes, backdrop effects beyond the documented fallback, video, iframe,
+  WebGL, interaction, and form behavior.
+
+For presentation HTML, prefer fixed slide dimensions, explicit fonts and sizes,
+simple DOM ownership (one editable object per element), and layout structures that
+have a direct PowerPoint representation. Unsupported interactive constructs should
+be rejected or flattened intentionally, not approximated silently.

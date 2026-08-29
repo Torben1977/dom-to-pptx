@@ -48,6 +48,12 @@ function lineStartingWith(pageNumber, expectedPrefix) {
   return line;
 }
 
+function lineContaining(pageNumber, expectedText) {
+  const line = pageLines(pageNumber).find(({ text }) => text.includes(expectedText));
+  expect(line, `one Office-rendered line containing '${expectedText}' on page ${pageNumber}`).toBeDefined();
+  return line;
+}
+
 function readPpmPixels(filePath) {
   const buffer = readFileSync(filePath);
   let offset = 0;
@@ -194,5 +200,37 @@ officeDescribe('LibreOffice visual round trip', () => {
     expect(timelineTitle.yMax - timelineTitle.yMin).toBeGreaterThan(12);
     expect(timelineBody.yMax - timelineBody.yMin).toBeGreaterThan(8);
     expect(timelineBody.yMin).toBeGreaterThan(timelineTitle.yMax);
+  });
+
+  it('keeps metric values and currency units on one readable Office-rendered line', () => {
+    const primaryMetric = lineWith(8, '2,6 Mio. €');
+    const costMetric = lineWith(8, '4,1 Mio. €');
+    const support = lineWith(8, 'höher als im Business Case angenommen');
+    const capacity = lineWith(8, '5–10 %');
+    const duration = lineWith(8, '12 Monate');
+
+    expect(primaryMetric.yMax - primaryMetric.yMin).toBeGreaterThan(30);
+    expect(costMetric.yMax - costMetric.yMin).toBeGreaterThan(18);
+    // Glyph bounding boxes can overlap slightly even when their baselines and
+    // painted pixels do not. Guard the actual vertical progression instead of
+    // assuming disjoint font ascender/descender boxes.
+    expect(support.yMin).toBeGreaterThan(costMetric.yMin + 20);
+    expect(capacity.yMax - capacity.yMin).toBeGreaterThan(10);
+    expect(duration.yMax - duration.yMin).toBeGreaterThan(7);
+  });
+
+  it('keeps a list footer below the final bullet after Office lays out the card', () => {
+    const finalBullet = lineContaining(9, 'Eine Zusage der beteiligten Personalvertretungen liegt noch nicht vor.');
+    const note = lineWith(9, 'Diese Punkte sind offene Unsicherheiten, keine stillschweigenden Annahmen.');
+
+    expect(note.yMin).toBeGreaterThan(finalBullet.yMax);
+  });
+
+  it('keeps compact axis labels on one Office-rendered line', () => {
+    const first = lineWith(10, 'Wirksame, aber teure Einzellösung');
+    const second = lineWith(10, 'Vertiefung · gesamter Wertstrom');
+
+    expect(first.yMax - first.yMin).toBeGreaterThan(7);
+    expect(second.yMax - second.yMin).toBeGreaterThan(8);
   });
 });

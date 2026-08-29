@@ -280,7 +280,7 @@ describe('getLaunchArgs', () => {
     expect(shapeFor('Browser-fit title')).not.toContain('<a:normAutofit');
     expect(shapeFor('Fit')).not.toContain('<a:normAutofit');
     expect(shapeFor('Padded')).not.toContain('<a:normAutofit');
-    expect(shapeFor('Tight padded')).toContain('<a:normAutofit');
+    expect(shapeFor('Tight padded')).not.toContain('<a:normAutofit');
     expect(shapeFor('Browser-overflowing title with a second line')).toContain('<a:normAutofit');
   }, 40000);
 

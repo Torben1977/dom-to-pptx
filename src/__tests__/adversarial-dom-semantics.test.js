@@ -313,7 +313,7 @@ describe('adversarial DOM semantics', () => {
 
     expect(clickIds.length).toBeGreaterThan(0);
     expect(clickIds).not.toContain('rIdundefined');
-    expect(hyperlinkRelationships).toHaveLength(clickIds.length);
+    expect(hyperlinkRelationships).toHaveLength(new Set(clickIds).size);
     for (const clickId of clickIds) {
       const relationship = relationshipsById.get(clickId);
       expect(relationship).toBeDefined();

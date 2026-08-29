@@ -83,6 +83,24 @@ describe('flow text groups', () => {
     expect(options.h).toBeCloseTo(2.2917, 4);
   });
 
+  it('keeps an inline lead and a block-displayed semantic text run in one flow', () => {
+    const container = document.createElement('div');
+    container.innerHTML =
+      '<strong>Nur das Zusammenspiel schafft Wirkung.</strong>' +
+      '<span style="display:block;margin-top:7px">Ziel, Mittel und Verantwortung greifen ineinander.</span>';
+    document.body.append(container);
+
+    expect(isTextContainer(container)).toBe(true);
+
+    const parts = collectTextParts(container, window.getComputedStyle(container), 1);
+    expect(parts.map((part) => part.text).join('')).toContain('Nur das Zusammenspiel schafft Wirkung.');
+    expect(parts.map((part) => part.text).join('')).toContain(
+      'Ziel, Mittel und Verantwortung greifen ineinander.'
+    );
+    const secondRun = parts.findIndex((part) => part.text.includes('Ziel, Mittel'));
+    expect(parts.slice(0, secondRun).some((part) => part.options?.breakLine)).toBe(true);
+  });
+
   it('does not collapse a decorated or positioned child into text flow', () => {
     const container = document.createElement('div');
     container.innerHTML = '<b>Lead</b><p>Body</p>';

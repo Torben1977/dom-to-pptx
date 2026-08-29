@@ -55,6 +55,10 @@ const PX_TO_INCH = 1 / PPI;
  * @param {boolean} [options.svgAsVector=false] - If true, keeps SVG as vector (for Convert to Shape in PowerPoint)
  * @param {boolean} [options.strictFontEmbedding=false] - If true, aborts the export when any requested font
  *   variant cannot be embedded instead of silently producing a fallback-font deck.
+ * @param {'ignore'|'error'|'rasterize'} [options.boundaryPolicy='ignore'] - Handling for DOM/CSS
+ *   constructs that cannot be represented faithfully as editable PowerPoint objects. `error`
+ *   rejects the export with structured findings; `rasterize` replaces the smallest affected
+ *   subtree with a fidelity image; `ignore` preserves the historic best-effort mapper.
  * @param {boolean} [options.skipNormalize=false] - If true, skips re-zipping with DEFLATE
  *   and stripping dangling [Content_Types].xml Overrides. Leave it false unless you are
  *   debugging the raw PptxGenJS output, otherwise Microsoft PowerPoint may reject the file.
@@ -427,6 +431,39 @@ function compareKeys(keyA, keyB) {
   return 0;
 }
 
+function zIndexParticipatesInStacking(node, style) {
+  const position = style.position || 'static';
+  if (position !== 'static') return true;
+  const parentDisplay = node.parentElement ? window.getComputedStyle(node.parentElement).display || '' : '';
+  return parentDisplay.includes('flex') || parentDisplay.includes('grid');
+}
+
+/**
+ * Return whether the element establishes an independent CSS stacking context.
+ *
+ * Non-context wrappers must not trap positioned descendants in their DOM branch:
+ * those descendants participate in the nearest ancestor stacking context. This
+ * distinction is the part a nested lexicographic DOM key cannot model by itself.
+ */
+function createsCssStackingContext(node, style, root) {
+  if (node === root) return true;
+  if (style.position === 'fixed' || style.position === 'sticky') return true;
+  if (style.zIndex !== 'auto' && zIndexParticipatesInStacking(node, style)) return true;
+  if ((parseFloat(style.opacity) || 1) < 1) return true;
+  if (style.transform && style.transform !== 'none') return true;
+  if (style.perspective && style.perspective !== 'none') return true;
+  if (style.filter && style.filter !== 'none') return true;
+  if (style.backdropFilter && style.backdropFilter !== 'none') return true;
+  if (style.mixBlendMode && style.mixBlendMode !== 'normal') return true;
+  if (style.isolation === 'isolate') return true;
+  if (style.clipPath && style.clipPath !== 'none') return true;
+  if (style.mask && style.mask !== 'none') return true;
+  if (style.maskImage && style.maskImage !== 'none') return true;
+  if (/\b(layout|paint|strict|content)\b/.test(style.contain || '')) return true;
+  if (style.containerType && style.containerType !== 'normal') return true;
+  return /\b(transform|opacity|filter|perspective|clip-path|mask)\b/.test(style.willChange || '');
+}
+
 function getCustomShapeType(customShapeName, pptx) {
   if (!customShapeName) return pptx.ShapeType.rect;
   const name = customShapeName.trim().replace(/['"]/g, '').toLowerCase();
@@ -444,6 +481,18 @@ function getCustomShapeType(customShapeName, pptx) {
     if (key.toLowerCase() === name) return pptx.ShapeType[key];
   }
   return pptx.ShapeType.rect;
+}
+
+function isSimpleEditableMultiColumnContainer(node, style = window.getComputedStyle(node)) {
+  const columnCount = Number.parseInt(style.columnCount || style.webkitColumnCount || '1', 10);
+  if (!Number.isFinite(columnCount) || columnCount <= 1) return false;
+  return Array.from(node.childNodes).every((child) => {
+    if (child.nodeType === 3) return !child.textContent.trim();
+    if (child.nodeType !== 1) return true;
+    const childStyle = window.getComputedStyle(child);
+    if (childStyle.display === 'none' || childStyle.visibility === 'hidden') return true;
+    return child.getClientRects().length === 1;
+  });
 }
 
 async function processSlide(root, slide, pptx, globalOptions = {}) {
@@ -467,12 +516,25 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   const asyncTasks = []; // Queue for heavy operations (Images, Canvas)
   let domOrderCounter = 0;
   const pseudoContentByNode = globalOptions.includePseudoElements === false ? null : buildPseudoContentMap(root);
+  const boundaryPolicy = globalOptions.boundaryPolicy || 'ignore';
+  if (!['ignore', 'error', 'rasterize'].includes(boundaryPolicy)) {
+    throw new Error(`Invalid boundaryPolicy "${boundaryPolicy}". Expected one of: ignore, error, rasterize.`);
+  }
+  const boundaryFindings = boundaryPolicy === 'ignore' ? [] : analyzeUnsupportedBoundaries(root);
+  if (boundaryPolicy === 'error' && boundaryFindings.length > 0) {
+    throw new Error(
+      `DOM_TO_PPTX_UNSUPPORTED_BOUNDARY ${JSON.stringify(serializeBoundaryFindings(boundaryFindings))}`
+    );
+  }
+  const boundaryRasterRoots =
+    boundaryPolicy === 'rasterize' ? outermostBoundaryElements(boundaryFindings) : new Set();
 
   // Sync Traversal Function
-  function collect(node, parentSortKey, parentOpacity = 1, inheritedAnimation = null) {
+  function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null) {
     const order = domOrderCounter++;
 
-    let currentSortKey = parentSortKey;
+    let currentSortKey = parentContextKey;
+    let childContextKey = parentContextKey;
     let currentOpacity = parentOpacity;
     let nodeStyle = null;
     let skipCurrentNode = false;
@@ -492,14 +554,16 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
         return;
       }
       skipCurrentNode = nodeStyle.visibility === 'hidden' || nodeStyle.visibility === 'collapse';
+      const establishesContext = createsCssStackingContext(node, nodeStyle, root);
       let zVal = 0;
-      if (nodeStyle.zIndex !== 'auto') {
+      if (establishesContext && nodeStyle.zIndex !== 'auto' && zIndexParticipatesInStacking(node, nodeStyle)) {
         const parsedZ = parseInt(nodeStyle.zIndex);
         if (!isNaN(parsedZ)) {
           zVal = parsedZ;
         }
       }
-      currentSortKey = parentSortKey.concat([zVal, order]);
+      currentSortKey = parentContextKey.concat([zVal, order]);
+      if (establishesContext) childContextKey = currentSortKey;
     }
 
     // Prepare the item. If it needs async work, it returns a 'job'
@@ -508,6 +572,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
       : prepareRenderItem(node, { ...layoutConfig, root }, order, pptx, currentSortKey, nodeStyle, {
           ...globalOptions,
           _pseudoContentByNode: pseudoContentByNode,
+          _boundaryRasterRoots: boundaryRasterRoots,
           _inheritedOpacity: parentOpacity,
           _inheritedAnimation: inheritedAnimation,
         });
@@ -538,7 +603,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     }
     for (let i = 0; i < childNodes.length; i++) {
       if (skipCurrentNode && childNodes[i].nodeType !== 1) continue;
-      collect(childNodes[i], currentSortKey, currentOpacity, nextInheritedAnimation);
+      collect(childNodes[i], childContextKey, currentOpacity, nextInheritedAnimation);
     }
   }
 
@@ -589,7 +654,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
  * Optimized html2canvas wrapper
  * Includes fix for cropped icons by adjusting styles in the cloned document.
  */
-async function elementToCanvasImage(node, widthPx, heightPx) {
+async function elementToCanvasImage(node, widthPx, heightPx, captureOptions = {}) {
   return new Promise((resolve) => {
     // 1. Assign a temp ID to locate the node inside the cloned document
     const originalId = node.id;
@@ -601,7 +666,8 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
     const style = window.getComputedStyle(node);
 
     // Add padding to the clone to capture spilling content (like extensive font glyphs)
-    const padding = 10;
+    const preserveOverflow = captureOptions.preserveOverflow === true;
+    const padding = preserveOverflow ? 0 : 10;
 
     html2canvas(node, {
       backgroundColor: null,
@@ -631,8 +697,9 @@ async function elementToCanvasImage(node, widthPx, heightPx) {
             img.style.setProperty('display', 'inline-block', 'important');
           });
 
-          // 3. Force overflow visible on the container so glyphs bleeding out aren't cut
-          clonedNode.style.overflow = 'visible';
+          // 3. Icon captures include glyph bleed. Fidelity captures of an
+          // overflow boundary must retain the authored clip instead.
+          if (!preserveOverflow) clonedNode.style.overflow = 'visible';
 
           // 4. Adjust alignment for Icons to prevent baseline clipping
           // (Applies to <i>, <span>, or standard icon classes)
@@ -946,6 +1013,186 @@ function getNodeSelector(node) {
   return node.tagName.toLowerCase();
 }
 
+function clipsOverflow(style) {
+  const overflowX = style.overflowX || style.overflow;
+  const overflowY = style.overflowY || style.overflow;
+  return ['hidden', 'clip'].includes(overflowX) || ['hidden', 'clip'].includes(overflowY);
+}
+
+function overflowClipBox(node, style) {
+  const rect = node.getBoundingClientRect();
+  const clipsX = ['hidden', 'clip'].includes(style.overflowX || style.overflow);
+  const clipsY = ['hidden', 'clip'].includes(style.overflowY || style.overflow);
+  const left = rect.left + (node.clientLeft || 0);
+  const top = rect.top + (node.clientTop || 0);
+  return {
+    clipsX,
+    clipsY,
+    left,
+    top,
+    right: left + (node.clientWidth || rect.width),
+    bottom: top + (node.clientHeight || rect.height),
+  };
+}
+
+function exceedsOverflowClip(rect, clip) {
+  return (
+    (clip.clipsX && (rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5)) ||
+    (clip.clipsY && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5))
+  );
+}
+
+/**
+ * Return whether an overflowing descendant can be represented by shrinking one
+ * editable PowerPoint rectangle. Text, media, borders, radii, shadows, gradients,
+ * and transforms require crop/mask semantics and therefore are not included.
+ */
+function isSimpleAxisAlignedSolidClipTarget(node, style) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+  const background = parseColor(style.backgroundColor);
+  const hasBorder = ['Top', 'Right', 'Bottom', 'Left'].some(
+    (side) => (parseFloat(style[`border${side}Width`]) || 0) > 0
+  );
+  return (
+    (!style.transform || style.transform === 'none') &&
+    node.children.length === 0 &&
+    !node.textContent.trim() &&
+    background.hex &&
+    background.opacity > 0 &&
+    (!style.backgroundImage || style.backgroundImage === 'none') &&
+    !hasBorder &&
+    (!style.borderRadius || parseFloat(style.borderRadius) === 0) &&
+    (!style.boxShadow || style.boxShadow === 'none') &&
+    (!style.filter || style.filter === 'none')
+  );
+}
+
+function hasVisibleDirectText(node) {
+  return Array.from(node.childNodes).some(
+    (child) => child.nodeType === Node.TEXT_NODE && child.nodeValue && child.nodeValue.trim()
+  );
+}
+
+/**
+ * Detect overflow clipping that cannot stay both editable and browser-faithful.
+ * The slide root is excluded because PowerPoint's slide canvas already supplies
+ * that outer clip boundary.
+ */
+function analyzeOverflowClippingBoundaries(root) {
+  const findings = [];
+  const containers = Array.from(root.querySelectorAll('*'));
+
+  for (const container of containers) {
+    const style = window.getComputedStyle(container);
+    if (!clipsOverflow(style)) continue;
+
+    const clip = overflowClipBox(container, style);
+    let offendingNode = null;
+    let reason = null;
+
+    if (
+      hasVisibleDirectText(container) &&
+      ((clip.clipsX && container.scrollWidth > container.clientWidth + 0.5) ||
+        (clip.clipsY && container.scrollHeight > container.clientHeight + 0.5))
+    ) {
+      offendingNode = container;
+      reason = 'text';
+    }
+
+    if (!offendingNode) {
+      for (const descendant of Array.from(container.querySelectorAll('*'))) {
+        const descendantStyle = window.getComputedStyle(descendant);
+        const opacity = parseFloat(descendantStyle.opacity);
+        if (
+          descendantStyle.display === 'none' ||
+          descendantStyle.visibility === 'hidden' ||
+          descendantStyle.visibility === 'collapse' ||
+          (!Number.isNaN(opacity) && opacity === 0)
+        ) {
+          continue;
+        }
+        const descendantRect = descendant.getBoundingClientRect();
+        if (descendantRect.width < 0.5 || descendantRect.height < 0.5) continue;
+        if (!exceedsOverflowClip(descendantRect, clip)) continue;
+        if (isSimpleAxisAlignedSolidClipTarget(descendant, descendantStyle)) continue;
+
+        offendingNode = descendant;
+        const tag = (descendant.tagName || '').toLowerCase();
+        if (['img', 'svg', 'canvas', 'video'].includes(tag)) reason = 'media';
+        else if (descendantStyle.transform && descendantStyle.transform !== 'none') reason = 'transform';
+        else if (descendant.textContent.trim()) reason = 'text';
+        else reason = 'paint';
+        break;
+      }
+    }
+
+    if (offendingNode) {
+      findings.push({
+        type: 'overflow-clipping',
+        slideId: root.dataset?.slideId || null,
+        semanticId: offendingNode.dataset?.semanticId || null,
+        container: getNodeSelector(container),
+        descendant: getNodeSelector(offendingNode),
+        reason,
+        element: container,
+      });
+    }
+  }
+
+  return findings;
+}
+
+function analyzeMultiColumnBoundaries(root) {
+  const findings = [];
+  for (const container of Array.from(root.querySelectorAll('*'))) {
+    const style = window.getComputedStyle(container);
+    const columnCount = Number.parseInt(style.columnCount || style.webkitColumnCount || '1', 10);
+    if (
+      !Number.isFinite(columnCount) ||
+      columnCount <= 1 ||
+      isSimpleEditableMultiColumnContainer(container, style)
+    ) {
+      continue;
+    }
+
+    const directText = Array.from(container.childNodes).find(
+      (child) => child.nodeType === Node.TEXT_NODE && child.textContent.trim()
+    );
+    const fragmentedChild = Array.from(container.children).find((child) => child.getClientRects().length > 1);
+    const offendingNode = fragmentedChild || container;
+    findings.push({
+      type: 'multi-column-fragmentation',
+      slideId: root.dataset?.slideId || null,
+      semanticId: offendingNode.dataset?.semanticId || container.dataset?.semanticId || null,
+      container: getNodeSelector(container),
+      descendant: fragmentedChild ? getNodeSelector(fragmentedChild) : getNodeSelector(container),
+      reason: directText ? 'direct-text' : 'fragmented-block',
+      element: container,
+    });
+  }
+  return findings;
+}
+
+function analyzeUnsupportedBoundaries(root) {
+  return [...analyzeOverflowClippingBoundaries(root), ...analyzeMultiColumnBoundaries(root)];
+}
+
+function serializeBoundaryFindings(findings) {
+  return findings.map(({ type, slideId, semanticId, container, descendant, reason }) => ({
+    type,
+    slideId,
+    semanticId,
+    container,
+    descendant,
+    reason,
+  }));
+}
+
+function outermostBoundaryElements(findings) {
+  const candidates = findings.map((finding) => finding.element);
+  return new Set(candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate))));
+}
+
 function generateBorderTriangleSVG(w, h, borderLeft, borderTop, styles) {
   const topColor = parseColor(styles.borderTopColor);
   const rightColor = parseColor(styles.borderRightColor);
@@ -1135,6 +1382,11 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const y = config.offY + (rect.top - config.rootY) * PX_TO_INCH * scale;
 
   const rotation = getRotation(pseudoStyle.transform);
+  const resolvedRadii = resolveCssCornerRadii(pseudoStyle, rect.width, rect.height);
+  const isEllipse = Object.values(resolvedRadii).every(
+    (corner) =>
+      corner.x >= rect.width / 2 - TEXT_FIT_TOLERANCE_PX && corner.y >= rect.height / 2 - TEXT_FIT_TOLERANCE_PX
+  );
 
   // 1. Handle CSS Border Triangle
   if (isTriangle) {
@@ -1191,7 +1443,6 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   }
 
   const borderRadius = parseFloat(pseudoStyle.borderRadius) || 0;
-  const isCircle = borderRadius >= Math.min(rect.width, rect.height) / 2 - 1;
 
   // 3. Handle Text / Icon
   if (hasContent) {
@@ -1215,7 +1466,7 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
       line: hasBorder ? { color: borderCol.hex, width: borderWidth * 0.75 * scale } : null,
     };
 
-    if (isCircle) {
+    if (isEllipse) {
       textOptions.rectRadius = Math.min(w, h) / 2;
     } else if (borderRadius > 0) {
       let cappedRadiusPx = Math.min(borderRadius, Math.min(rect.width, rect.height) / 2);
@@ -1251,7 +1502,7 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
       line: hasBorder ? { color: borderCol.hex, width: borderWidth * 0.75 * scale } : null,
     };
 
-    if (isCircle) {
+    if (isEllipse) {
       shapeType = pptx.ShapeType.ellipse;
     } else if (borderRadius > 0) {
       shapeType = pptx.ShapeType.roundRect;
@@ -1301,20 +1552,337 @@ function countParagraphs(node, scale, pseudoContentByNode = null) {
   return count;
 }
 
+function collapseVerticalMargins(first, second) {
+  if (first >= 0 && second >= 0) return Math.max(first, second);
+  if (first <= 0 && second <= 0) return Math.min(first, second);
+  return first + second;
+}
+
 const TEXT_FIT_TOLERANCE_PX = 0.5;
-const TEXT_FIT_RESERVE_RATIO = 0.01;
+const TEXT_FIT_RESERVE_RATIO = 0.03;
+
+function renderedTextLineCount(node) {
+  if (!node?.ownerDocument) return null;
+  if (node.nodeType === Node.ELEMENT_NODE && node.querySelector?.('br')) return null;
+
+  try {
+    const range = node.ownerDocument.createRange();
+    if (node.nodeType === Node.TEXT_NODE) range.selectNode(node);
+    else range.selectNodeContents(node);
+    const rects = Array.from(range.getClientRects())
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+      .sort((first, second) => first.top - second.top || first.left - second.left);
+    range.detach();
+    if (rects.length === 0) return null;
+
+    const bands = [];
+    for (const rect of rects) {
+      const matchingBand = bands.find(
+        (band) => rect.top < band.bottom - TEXT_FIT_TOLERANCE_PX && rect.bottom > band.top + TEXT_FIT_TOLERANCE_PX
+      );
+      if (matchingBand) {
+        matchingBand.top = Math.min(matchingBand.top, rect.top);
+        matchingBand.bottom = Math.max(matchingBand.bottom, rect.bottom);
+      } else {
+        bands.push({ top: rect.top, bottom: rect.bottom });
+      }
+    }
+    return bands.length;
+  } catch {
+    return null;
+  }
+}
+
+function preservesBrowserSingleLine(node, style) {
+  const contractOwner = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  if (contractOwner?.dataset?.pptxRenderedLines === '1') return true;
+  if (style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre') return true;
+  if (style.whiteSpace !== 'normal') return false;
+  return renderedTextLineCount(node) === 1;
+}
+
+function clampAnonymousTextReserve(node, rect, width, height) {
+  const parent = node?.parentElement;
+  if (!parent) return { width, height };
+  const parentStyle = window.getComputedStyle(parent);
+  const display = parentStyle.display || '';
+  if (!display.includes('flex') && !display.includes('grid')) return { width, height };
+
+  const parentRect = parent.getBoundingClientRect();
+  const contentRight =
+    parentRect.right - (parseFloat(parentStyle.borderRightWidth) || 0) - (parseFloat(parentStyle.paddingRight) || 0);
+  const contentBottom =
+    parentRect.bottom - (parseFloat(parentStyle.borderBottomWidth) || 0) - (parseFloat(parentStyle.paddingBottom) || 0);
+  let maxRight = contentRight;
+  let maxBottom = contentBottom;
+
+  for (const sibling of Array.from(parent.children)) {
+    const siblingRect = sibling.getBoundingClientRect();
+    const overlapsVertically =
+      siblingRect.bottom > rect.top + TEXT_FIT_TOLERANCE_PX && siblingRect.top < rect.bottom - TEXT_FIT_TOLERANCE_PX;
+    const overlapsHorizontally =
+      siblingRect.right > rect.left + TEXT_FIT_TOLERANCE_PX && siblingRect.left < rect.right - TEXT_FIT_TOLERANCE_PX;
+    if (overlapsVertically && siblingRect.left >= rect.right - TEXT_FIT_TOLERANCE_PX) {
+      maxRight = Math.min(maxRight, siblingRect.left);
+    }
+    if (overlapsHorizontally && siblingRect.top >= rect.bottom - TEXT_FIT_TOLERANCE_PX) {
+      maxBottom = Math.min(maxBottom, siblingRect.top);
+    }
+  }
+
+  const flexDirection = parentStyle.flexDirection || 'row';
+  const clampWidth = display.includes('grid') || flexDirection.startsWith('row');
+  const clampHeight = display.includes('grid') || flexDirection.startsWith('column');
+  return {
+    width: clampWidth ? Math.max(rect.width, Math.min(width, maxRight - rect.left)) : width,
+    height: clampHeight ? Math.max(rect.height, Math.min(height, maxBottom - rect.top)) : height,
+  };
+}
+
+function isBlockFlowBoundary(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+  if ((node.tagName || '').toLowerCase() === 'br') return true;
+  const display = window.getComputedStyle(node).display || '';
+  return /^(block|flow-root|flex|grid|table|list-item)/.test(display);
+}
+
+function adjacentSignificantSibling(node, direction) {
+  let sibling = direction === 'previous' ? node.previousSibling : node.nextSibling;
+  while (sibling) {
+    if (sibling.nodeType === Node.TEXT_NODE && !sibling.nodeValue.trim()) {
+      sibling = direction === 'previous' ? sibling.previousSibling : sibling.nextSibling;
+      continue;
+    }
+    if (sibling.nodeType === Node.COMMENT_NODE) {
+      sibling = direction === 'previous' ? sibling.previousSibling : sibling.nextSibling;
+      continue;
+    }
+    return sibling;
+  }
+  return null;
+}
+
+function groupClientRectsIntoLineBands(rects) {
+  const bands = [];
+  for (const rect of rects.sort((first, second) => first.top - second.top || first.left - second.left)) {
+    const matchingBand = bands.find(
+      (band) => rect.top < band.bottom - TEXT_FIT_TOLERANCE_PX && rect.bottom > band.top + TEXT_FIT_TOLERANCE_PX
+    );
+    if (matchingBand) {
+      matchingBand.left = Math.min(matchingBand.left, rect.left);
+      matchingBand.right = Math.max(matchingBand.right, rect.right);
+      matchingBand.top = Math.min(matchingBand.top, rect.top);
+      matchingBand.bottom = Math.max(matchingBand.bottom, rect.bottom);
+    } else {
+      bands.push({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+    }
+  }
+  return bands;
+}
 
 /**
- * Ask PowerPoint to shrink text only when the browser reports overflow or
- * less than the agreed safety reserve. Browser-fit text otherwise keeps its
- * authored font sizes; unconditional normAutofit lets Office silently reduce
- * mixed text runs because its line metrics differ from Chromium's.
+ * Resolve the rectangular line region of a plain text block beside sibling
+ * floats. CSS shortens line boxes around a float without changing the block's
+ * own getBoundingClientRect(); using that full block box in PowerPoint places
+ * editable text underneath the floated object.
+ *
+ * A single PPTX text box is safe only while every rendered line has the same
+ * available left/right boundaries. If the text first runs beside and later
+ * below a float, the browser flow is non-rectangular and this function declines
+ * to approximate it. A future fragment/raster fallback can handle that broader
+ * class without corrupting the common editable case.
  */
-function getPowerPointTextFit(node, style, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
-  if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+function getSiblingFloatTextRect(node, style) {
+  if (!node?.parentElement || node.nodeType !== Node.ELEMENT_NODE) return null;
+  if (style.float && style.float !== 'none') return null;
+  if (style.position && !['static', 'relative'].includes(style.position)) return null;
+
+  // Keep the projection exact: text-box margins would otherwise apply these
+  // insets a second time after the browser-resolved boundary is selected.
+  const hasInsets = [
+    style.paddingTop,
+    style.paddingRight,
+    style.paddingBottom,
+    style.paddingLeft,
+    style.borderTopWidth,
+    style.borderRightWidth,
+    style.borderBottomWidth,
+    style.borderLeftWidth,
+  ].some((value) => (parseFloat(value) || 0) > TEXT_FIT_TOLERANCE_PX);
+  if (hasInsets) return null;
+
+  const precedingFloats = [];
+  for (const sibling of Array.from(node.parentElement.children)) {
+    if (sibling === node) break;
+    const siblingStyle = window.getComputedStyle(sibling);
+    if (!['left', 'right'].includes(siblingStyle.float)) continue;
+    const siblingRect = sibling.getBoundingClientRect();
+    if (siblingRect.width < TEXT_FIT_TOLERANCE_PX || siblingRect.height < TEXT_FIT_TOLERANCE_PX) continue;
+    precedingFloats.push({
+      side: siblingStyle.float,
+      left: siblingRect.left - (parseFloat(siblingStyle.marginLeft) || 0),
+      right: siblingRect.right + (parseFloat(siblingStyle.marginRight) || 0),
+      top: siblingRect.top - (parseFloat(siblingStyle.marginTop) || 0),
+      bottom: siblingRect.bottom + (parseFloat(siblingStyle.marginBottom) || 0),
+    });
+  }
+  if (precedingFloats.length === 0) return null;
+
+  let clientRects;
+  try {
+    const range = node.ownerDocument.createRange();
+    range.selectNodeContents(node);
+    clientRects = Array.from(range.getClientRects()).filter(
+      (rect) => rect.width > TEXT_FIT_TOLERANCE_PX && rect.height > TEXT_FIT_TOLERANCE_PX
+    );
+    range.detach();
+  } catch {
+    return null;
+  }
+  if (clientRects.length === 0) return null;
+
+  const nodeRect = node.getBoundingClientRect();
+  const bands = groupClientRectsIntoLineBands(clientRects);
+  const regions = bands.map((band) => {
+    let left = nodeRect.left;
+    let right = nodeRect.right;
+    let affected = false;
+    for (const floating of precedingFloats) {
+      const overlapsBand =
+        floating.bottom > band.top + TEXT_FIT_TOLERANCE_PX && floating.top < band.bottom - TEXT_FIT_TOLERANCE_PX;
+      if (!overlapsBand) continue;
+      affected = true;
+      if (floating.side === 'left') left = Math.max(left, floating.right);
+      else right = Math.min(right, floating.left);
+    }
+    return { left, right, affected };
+  });
+
+  if (!regions.some((region) => region.affected)) return null;
+  const first = regions[0];
+  const isRectangular = regions.every(
+    (region) =>
+      region.affected &&
+      Math.abs(region.left - first.left) <= TEXT_FIT_TOLERANCE_PX &&
+      Math.abs(region.right - first.right) <= TEXT_FIT_TOLERANCE_PX
+  );
+  if (!isRectangular || first.right - first.left < TEXT_FIT_TOLERANCE_PX) return null;
+
+  return {
+    left: first.left,
+    right: first.right,
+    top: nodeRect.top,
+    bottom: nodeRect.bottom,
+    width: first.right - first.left,
+    height: nodeRect.height,
+  };
+}
+
+/**
+ * Inline text between block-flow boundaries owns a complete CSS line box even
+ * though getBoundingClientRect() only reports the painted glyphs. PowerPoint
+ * has no anonymous line box, so use the parent's content width for that one
+ * editable text shape. Painted/padded inline boxes retain their own geometry.
+ */
+function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
+  if (!node?.parentElement || style.display !== 'inline' || renderedTextLineCount(node) !== 1) return null;
+  const parent = node.parentElement;
+  const parentStyle = window.getComputedStyle(parent);
+  if (parentStyle.display.includes('flex') || parentStyle.display.includes('grid')) return null;
+
+  const background = parseColor(style.backgroundColor);
+  const hasPaint =
+    (background.hex && background.opacity > 0) ||
+    (parseFloat(style.borderTopWidth) || 0) > 0 ||
+    (parseFloat(style.borderRightWidth) || 0) > 0 ||
+    (parseFloat(style.borderBottomWidth) || 0) > 0 ||
+    (parseFloat(style.borderLeftWidth) || 0) > 0 ||
+    (parseFloat(style.paddingTop) || 0) > 0 ||
+    (parseFloat(style.paddingRight) || 0) > 0 ||
+    (parseFloat(style.paddingBottom) || 0) > 0 ||
+    (parseFloat(style.paddingLeft) || 0) > 0;
+  if (hasPaint) return null;
+
+  const previous = adjacentSignificantSibling(node, 'previous');
+  const next = adjacentSignificantSibling(node, 'next');
+  const startsLine = !previous || isBlockFlowBoundary(previous);
+  const endsLine = !next || isBlockFlowBoundary(next);
+  if (!startsLine || !endsLine) return null;
 
   const effectiveReserveRatio =
     Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
+  const parentRect = parent.getBoundingClientRect();
+  const contentLeft =
+    parentRect.left + (parseFloat(parentStyle.borderLeftWidth) || 0) + (parseFloat(parentStyle.paddingLeft) || 0);
+  const contentRight =
+    parentRect.right - (parseFloat(parentStyle.borderRightWidth) || 0) - (parseFloat(parentStyle.paddingRight) || 0);
+  const paddingLeft = parentRect.left + (parseFloat(parentStyle.borderLeftWidth) || 0);
+  const paddingRight = parentRect.right - (parseFloat(parentStyle.borderRightWidth) || 0);
+  const ownRect = node.getBoundingClientRect();
+  const contentWidth = contentRight - contentLeft;
+  if (contentWidth <= ownRect.width + TEXT_FIT_TOLERANCE_PX) return null;
+
+  const desiredWidth = contentWidth * (1 + effectiveReserveRatio);
+  const availableWidth = paddingRight - paddingLeft;
+  const width = Math.min(desiredWidth, availableWidth);
+  let left = contentLeft;
+  const align = style.textAlign === 'start' ? (style.direction === 'rtl' ? 'right' : 'left') : style.textAlign;
+  if (align === 'right' || align === 'end') left = paddingRight - width;
+  else if (align === 'center') left = paddingLeft + (availableWidth - width) / 2;
+
+  const lineHeight = parseFloat(style.lineHeight) || ownRect.height;
+  const height = Math.max(ownRect.height, lineHeight) * (1 + effectiveReserveRatio);
+  const top = ownRect.top - Math.max(0, height - ownRect.height) / 2;
+  return { left, right: left + width, top, bottom: top + height, width, height };
+}
+
+function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
+  if (!node?.parentElement || !preservesBrowserSingleLine(node, style)) return rect;
+  const effectiveReserveRatio =
+    Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
+  if (effectiveReserveRatio === 0) return rect;
+
+  const parent = node.parentElement;
+  const parentRect = parent.getBoundingClientRect();
+  const parentStyle = window.getComputedStyle(parent);
+  const contentLeft =
+    parentRect.left + (parseFloat(parentStyle.borderLeftWidth) || 0) + (parseFloat(parentStyle.paddingLeft) || 0);
+  const contentRight =
+    parentRect.right - (parseFloat(parentStyle.borderRightWidth) || 0) - (parseFloat(parentStyle.paddingRight) || 0);
+  const contentTop =
+    parentRect.top + (parseFloat(parentStyle.borderTopWidth) || 0) + (parseFloat(parentStyle.paddingTop) || 0);
+  const contentBottom =
+    parentRect.bottom - (parseFloat(parentStyle.borderBottomWidth) || 0) - (parseFloat(parentStyle.paddingBottom) || 0);
+
+  const desiredWidth = rect.width * (1 + effectiveReserveRatio);
+  const lineHeight = parseFloat(style.lineHeight) || rect.height;
+  const desiredHeight = Math.max(rect.height, lineHeight) * (1 + effectiveReserveRatio);
+  const width = Math.min(desiredWidth, Math.max(rect.width, contentRight - contentLeft));
+  const height = Math.min(desiredHeight, Math.max(rect.height, contentBottom - contentTop));
+  const horizontalDelta = Math.max(0, width - rect.width);
+  const verticalDelta = Math.max(0, height - rect.height);
+
+  const leftInset = parseFloat(style.left);
+  const rightInset = parseFloat(style.right);
+  const anchorRight = Number.isFinite(rightInset) && (!Number.isFinite(leftInset) || rightInset < leftInset);
+  const topInset = parseFloat(style.top);
+  const bottomInset = parseFloat(style.bottom);
+  const anchorBottom = Number.isFinite(bottomInset) && (!Number.isFinite(topInset) || bottomInset < topInset);
+  let left = anchorRight ? rect.left - horizontalDelta : rect.left;
+  let top = anchorBottom ? rect.top - verticalDelta : rect.top;
+  left = Math.max(contentLeft, Math.min(left, contentRight - width));
+  top = Math.max(contentTop, Math.min(top, contentBottom - height));
+
+  return { left, right: left + width, top, bottom: top + height, width, height };
+}
+
+/**
+ * Ask PowerPoint to shrink text only when the browser reports real overflow.
+ * The metric reserve is represented by text-box geometry elsewhere; using it
+ * as an autofit trigger silently changes authored type sizes in Office.
+ */
+function getPowerPointTextFit(node, style) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
 
   const rect = node.getBoundingClientRect();
   const fallbackClientWidth = Math.max(
@@ -1346,30 +1914,7 @@ function getPowerPointTextFit(node, style, reserveRatio = TEXT_FIT_RESERVE_RATIO
   );
   if (contentWidth <= 0 || contentHeight <= 0) return 'shrink';
 
-  try {
-    const range = node.ownerDocument.createRange();
-    range.selectNodeContents(node);
-    const lineRects = Array.from(range.getClientRects()).filter(
-      (lineRect) => lineRect.width > 0 && lineRect.height > 0
-    );
-    const contentRect = range.getBoundingClientRect();
-    range.detach();
-
-    const renderedContentHeight = contentRect.height || 0;
-    const widestLine = lineRects.reduce((maximum, lineRect) => Math.max(maximum, lineRect.width), 0);
-    const reserveFactor = 1 - effectiveReserveRatio;
-    // Range geometry excludes the element's padding, so compare it with the
-    // matching content box rather than the padded client box. The emitted PPTX
-    // margins consume the same padding and leave only this inner area for text.
-    const verticalRisk = renderedContentHeight > 0 && renderedContentHeight > contentHeight * reserveFactor;
-    const nowrap = style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre';
-    const horizontalRisk = nowrap && widestLine > 0 && widestLine > contentWidth * reserveFactor;
-    return verticalRisk || horizontalRisk ? 'shrink' : null;
-  } catch {
-    // If a DOM implementation cannot provide line boxes, the already checked
-    // scroll geometry remains the authoritative signal. Do not invent shrink.
-    return null;
-  }
+  return null;
 }
 
 function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, computedStyle, globalOptions = {}) {
@@ -1381,7 +1926,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const parent = node.parentElement;
     if (!parent) return null;
 
-    if (isTextContainerCached(parent, globalOptions._textContainerCache)) return null; // Parent handles it
+    if (
+      isTextContainerCached(parent, globalOptions._textContainerCache) &&
+      !isSimpleEditableMultiColumnContainer(parent)
+    ) {
+      return null; // Parent handles it
+    }
 
     const range = document.createRange();
     range.selectNode(node);
@@ -1389,13 +1939,27 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     range.detach();
 
     const style = window.getComputedStyle(parent);
-    const widthPx = rect.width;
-    const heightPx = rect.height;
+    const preserveSingleLine = preservesBrowserSingleLine(node, style);
+    const effectiveReserveRatio =
+      Number.isFinite(globalOptions._textFitReserveRatio) &&
+      globalOptions._textFitReserveRatio >= 0 &&
+      globalOptions._textFitReserveRatio <= 0.25
+        ? globalOptions._textFitReserveRatio
+        : TEXT_FIT_RESERVE_RATIO;
+    const lineHeightPx = parseFloat(style.lineHeight) || rect.height;
+    const reservedWidthPx = preserveSingleLine ? rect.width * (1 + effectiveReserveRatio) : rect.width;
+    const reservedHeightPx = preserveSingleLine
+      ? Math.max(rect.height, lineHeightPx) * (1 + effectiveReserveRatio)
+      : rect.height;
+    const clampedSize = clampAnonymousTextReserve(node, rect, reservedWidthPx, reservedHeightPx);
+    const widthPx = clampedSize.width;
+    const heightPx = clampedSize.height;
     const unrotatedW = widthPx * PX_TO_INCH * config.scale;
     const unrotatedH = heightPx * PX_TO_INCH * config.scale;
 
     const x = config.offX + (rect.left - config.rootX) * PX_TO_INCH * config.scale;
-    const y = config.offY + (rect.top - config.rootY) * PX_TO_INCH * config.scale;
+    const y =
+      config.offY + (rect.top - Math.max(0, heightPx - rect.height) / 2 - config.rootY) * PX_TO_INCH * config.scale;
 
     const textOpts = getTextStyle(style, config.scale, true, globalOptions._inheritedOpacity || 1);
 
@@ -1407,7 +1971,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
     }
 
-    const textFit = getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
+    // Anonymous flex/grid text items have no DOM box of their own. Preserve
+    // their browser line box plus the Office metric reserve instead of asking
+    // Office to shrink an exact glyph box.
+    const textFit = preserveSingleLine ? null : getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
     return {
       items: [
         {
@@ -1430,7 +1997,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             h: unrotatedH,
             margin: 0,
             ...(textFit && { fit: textFit }),
-            wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+            wrap: !preserveSingleLine,
           },
         },
       ],
@@ -1445,7 +2012,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   // We should not render a separate shape/text box for it.
   let ancestor = node.parentElement;
   while (ancestor) {
-    if (isTextContainerCached(ancestor, globalOptions._textContainerCache)) {
+    if (
+      isTextContainerCached(ancestor, globalOptions._textContainerCache) &&
+      !isSimpleEditableMultiColumnContainer(ancestor)
+    ) {
       return null;
     }
     ancestor = ancestor.parentElement;
@@ -1471,7 +2041,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     });
   }
 
-  const rect = node.getBoundingClientRect();
+  const browserRect = node.getBoundingClientRect();
+  const lineRect = getStandaloneInlineLineRect(node, computedStyle, globalOptions._textFitReserveRatio);
+  const floatFlowRect = lineRect ? null : getSiblingFloatTextRect(node, computedStyle);
+  const rect = lineRect || floatFlowRect || browserRect;
   if (rect.width < 0.5 || rect.height < 0.5) return null;
 
   const parentSortKey = effectiveZIndex;
@@ -1501,6 +2074,30 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   let h = unrotatedH;
 
   const items = [];
+
+  if (globalOptions._boundaryRasterRoots?.has(node)) {
+    const item = {
+      type: 'image',
+      zIndex: parentSortKey,
+      domOrder,
+      options: {
+        x,
+        y,
+        w,
+        h,
+        rotate: rotation,
+        data: null,
+        ...pictureTransparency(safeOpacity),
+        ...(hyperlink && { hyperlink }),
+      },
+    };
+    const job = async () => {
+      const pngData = await elementToCanvasImage(node, widthPx, heightPx, { preserveOverflow: true });
+      if (pngData) item.options.data = pngData;
+      else item.skip = true;
+    };
+    return { items: [item], job, stopRecursion: true };
+  }
 
   const customShapeName =
     style.getPropertyValue('--shape') ||
@@ -1696,8 +2293,11 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         } else {
           const mt = parseFloat(liStyle.marginTop) || 0;
           const mb = parseFloat(liStyle.marginBottom) || 0;
-          if (mt > 0) ptBefore = mt * 0.75 * config.scale;
-          if (mb > 0) ptAfter = mb * 0.75 * config.scale;
+          const previousStyle = index > 0 ? window.getComputedStyle(liChildren[index - 1]) : null;
+          const previousBottom = previousStyle ? parseFloat(previousStyle.marginBottom) || 0 : 0;
+          const collapsedBefore = index === 0 ? mt : collapseVerticalMargins(previousBottom, mt);
+          if (collapsedBefore > 0) ptBefore = collapsedBefore * 0.75 * config.scale;
+          if (index === liChildren.length - 1 && mb > 0) ptAfter = mb * 0.75 * config.scale;
         }
 
         if (ptBefore > 0) {
@@ -1769,7 +2369,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         });
       }
 
-      const textFit = getPowerPointTextFit(node, style, globalOptions._textFitReserveRatio);
+      const textFit = getPowerPointTextFit(node, style);
       items.push({
         type: 'text',
         zIndex: parentSortKey.concat([0, -1]),
@@ -1909,27 +2509,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
 
   // --- ASYNC JOB: IMG Tags ---
   if ((node?.tagName || '').toLowerCase() === 'img') {
-    let radii = {
-      tl: parseFloat(style.borderTopLeftRadius) || 0,
-      tr: parseFloat(style.borderTopRightRadius) || 0,
-      br: parseFloat(style.borderBottomRightRadius) || 0,
-      bl: parseFloat(style.borderBottomLeftRadius) || 0,
-    };
+    let radii = resolveCssCornerRadii(style, widthPx, heightPx);
 
-    const hasAnyRadius = radii.tl > 0 || radii.tr > 0 || radii.br > 0 || radii.bl > 0;
+    const hasAnyRadius = Object.values(radii).some((corner) => corner.x > 0 || corner.y > 0);
     if (!hasAnyRadius) {
       const parent = node.parentElement;
       const parentStyle = window.getComputedStyle(parent);
       if (parentStyle.overflow !== 'visible') {
-        const pRadii = {
-          tl: parseFloat(parentStyle.borderTopLeftRadius) || 0,
-          tr: parseFloat(parentStyle.borderTopRightRadius) || 0,
-          br: parseFloat(parentStyle.borderBottomRightRadius) || 0,
-          bl: parseFloat(parentStyle.borderBottomLeftRadius) || 0,
-        };
         const pRect = parent.getBoundingClientRect();
         if (Math.abs(pRect.width - rect.width) < 5 && Math.abs(pRect.height - rect.height) < 5) {
-          radii = pRadii;
+          radii = resolveCssCornerRadii(parentStyle, widthPx, heightPx);
         }
       }
     }
@@ -2031,7 +2620,16 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   let textPayload = null;
-  const isText = !shadowSvg && isTextContainerCached(node, globalOptions._textContainerCache);
+  const isSimpleMultiColumnContainer = isSimpleEditableMultiColumnContainer(node, style);
+  // PowerPoint has no reliable equivalent for browser column balancing. For the
+  // common presentation case where direct block items each occupy one column,
+  // keep those items as separate editable text boxes at their browser geometry.
+  // Fragmented blocks remain one parent payload until the boundary policy can
+  // reject or rasterize them explicitly.
+  const isText =
+    !shadowSvg &&
+    !isSimpleMultiColumnContainer &&
+    isTextContainerCached(node, globalOptions._textContainerCache);
 
   if (isText) {
     const textParts = collectTextParts(
@@ -2136,15 +2734,37 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         padding[0] * 72, // top
       ];
 
+      const preserveSingleLine = preservesBrowserSingleLine(node, style);
       textPayload = {
         text: textParts,
         align,
         valign,
         margin,
         rtlMode: isRtl,
-        fit: getPowerPointTextFit(node, style, globalOptions._textFitReserveRatio),
+        wrap: !preserveSingleLine,
+        fit: preserveSingleLine || lineRect ? null : getPowerPointTextFit(node, style),
       };
     }
+  }
+
+  const hasOwnPaint =
+    (bgColorObj.hex && bgColorObj.opacity > 0) ||
+    hasGradient ||
+    hasBgImgUrl ||
+    hasUniformBorder ||
+    hasCompositeBorder ||
+    hasShadow;
+  if (textPayload && !hasOwnPaint && rotation === 0 && preservesBrowserSingleLine(node, style)) {
+    // A resolved float region is already the complete browser line box, not a
+    // natural-width glyph box. Expanding it against the parent's full content
+    // area would move the text back underneath the float.
+    const reservedRect =
+      floatFlowRect || getReservedSingleLineRect(node, style, browserRect, globalOptions._textFitReserveRatio);
+    x = config.offX + (reservedRect.left - config.rootX) * PX_TO_INCH * config.scale;
+    y = config.offY + (reservedRect.top - config.rootY) * PX_TO_INCH * config.scale;
+    w = reservedRect.width * PX_TO_INCH * config.scale;
+    h = reservedRect.height * PX_TO_INCH * config.scale;
+    textPayload.fit = null;
   }
 
   // A solid, empty box can be clipped by shrinking its editable rectangle.
@@ -2180,12 +2800,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   if (hasBgImgUrl || hasGradient || (softEdge && bgColorObj.hex && !isImageWrapper)) {
     if (hasBgImgUrl) {
       const bgUrl = urlMatch[1];
-      const radii = {
-        tl: parseFloat(style.borderTopLeftRadius) || 0,
-        tr: parseFloat(style.borderTopRightRadius) || 0,
-        br: parseFloat(style.borderBottomRightRadius) || 0,
-        bl: parseFloat(style.borderBottomLeftRadius) || 0,
-      };
+      const radii = resolveCssCornerRadii(style, widthPx, heightPx);
 
       const bgItem = {
         type: 'image',
@@ -2275,7 +2890,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           rotate: rotation,
           margin: textPayload.margin,
           ...(textPayload.rtlMode && { rtlMode: true }),
-          wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+          wrap: textPayload.wrap,
           ...(textPayload.fit && { fit: textPayload.fit }),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
@@ -2363,7 +2978,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             valign: textPayload.valign,
             margin: textPayload.margin,
             ...(textPayload.rtlMode && { rtlMode: true }),
-            wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+            wrap: textPayload.wrap,
             ...(textPayload.fit && { fit: textPayload.fit }),
             vert: writingModeVert,
             ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
@@ -2442,7 +3057,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             valign: textPayload.valign,
             margin: textPayload.margin,
             ...(textPayload.rtlMode && { rtlMode: true }),
-            wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+            wrap: textPayload.wrap,
             ...(textPayload.fit && { fit: textPayload.fit }),
             vert: writingModeVert,
             ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),
@@ -2459,7 +3074,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           valign: textPayload.valign,
           margin: textPayload.margin,
           ...(textPayload.rtlMode && { rtlMode: true }),
-          wrap: !(style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre'),
+          wrap: textPayload.wrap,
           ...(textPayload.fit && { fit: textPayload.fit }),
           vert: writingModeVert,
           ...(writingModeVert && { textDirection: mapVertToTextDirection(writingModeVert) }),

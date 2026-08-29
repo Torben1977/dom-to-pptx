@@ -432,6 +432,7 @@ Returns: `Promise<Blob>` - Resolves with the generated PPTX file data (Blob).
 | `width`          | `number`  | `10`            | Custom slide width in inches (requires `height` to be set).                                                   |
 | `height`         | `number`  | `5.625`         | Custom slide height in inches (requires `width` to be set).                                                   |
 | `listConfig`     | `object`  | `undefined`     | Global overrides for list styles. Structure: `{ color: string, spacing: { before: number, after: number } }`. |
+| `boundaryPolicy` | `"ignore" \| "error" \| "rasterize"` | `"ignore"` | Controls unsupported editable conversion boundaries: keep best effort, reject with structured findings, or rasterize only the affected subtree. |
 
 > Note: animations and transitions are controlled entirely through CSS classes on your elements (see [Animated Slides & Transitions](#5-animated-slides--transitions-new-in-v120)), not through the `options` object.
 

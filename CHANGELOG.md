@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.9] - 2026-08-29
+
+### Fixed
+
+- Preserved browser single-line metrics, inline/flex text ownership, float-adjacent text regions, collapsed margins, list markers, and percentage-radius pseudo-elements without relying on PowerPoint shrink-to-fit.
+- Preserved CSS stacking-context paint order, calculated media positioning, independent elliptical image radii, hidden table rows, links, notes, inherited opacity, and SVG presentation styles across browser-to-PPTX export.
+- Added an explicit boundary policy for unsupported editable clipping and fragmented multi-column flow: controlled HTML fails with structured findings, while fidelity mode rasterizes only the affected subtree.
+
+### Added
+
+- Added editable support for simple CSS multi-column regions whose direct blocks each occupy one browser column.
+- Added real Chromium and LibreOffice regression coverage for representative OrgLith text flow, media geometry, stacking, clipping, single-line metrics, and multi-column conversion.
+
 ## [2.1.1-orglith.8] - 2026-08-29
 
 ### Fixed

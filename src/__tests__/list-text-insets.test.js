@@ -212,6 +212,56 @@ describe('list text insets', () => {
     }
   });
 
+  it('collapses adjacent list-item margins instead of adding before and after spacing twice', async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:1200px;top:220px;width:555px;height:174px;' +
+        'font-size:19px;line-height:28px;margin:0;padding:0'
+    );
+    for (const text of ['First open point', 'Second open point', 'Third open point']) {
+      const item = document.createElement('li');
+      item.setAttribute('style', 'font-size:19px;line-height:28px;margin:17px 0;padding:0');
+      item.textContent = text;
+      list.appendChild(item);
+    }
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 1200, top: 220, width: 555, height: 174 });
+    Array.from(list.children).forEach((item, index) => {
+      item.getBoundingClientRect = () => rect({ left: 1200, top: 237 + index * 45, width: 555, height: 28 });
+    });
+
+    try {
+      const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+      const zip = await JSZip.loadAsync(blob);
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+      const doc = new DOMParser().parseFromString(xml, 'text/xml');
+      const listShape = Array.from(doc.getElementsByTagName('p:sp')).find((shape) =>
+        Array.from(shape.getElementsByTagName('a:t')).some((run) => run.textContent === 'First open point')
+      );
+      expect(listShape).toBeDefined();
+      const paragraphs = Array.from(listShape.getElementsByTagName('a:p'));
+      expect(paragraphs).toHaveLength(3);
+      const spacing = paragraphs.map((paragraph) => ({
+        before: paragraph.getElementsByTagName('a:spcBef').length,
+        after: paragraph.getElementsByTagName('a:spcAft').length,
+      }));
+
+      expect(spacing).toEqual([
+        { before: 1, after: 0 },
+        { before: 1, after: 0 },
+        { before: 1, after: 1 },
+      ]);
+    } finally {
+      slide.remove();
+    }
+  });
+
   it('exports the empty-list boundary fixture as a valid slide', async () => {
     const documentNode = await emptyListDocument();
     expect(documentNode.getElementsByTagName('p:sld')).toHaveLength(1);

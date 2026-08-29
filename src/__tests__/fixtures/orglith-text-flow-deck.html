@@ -239,6 +239,134 @@
         line-height: 34px;
         color: #4b5563;
       }
+      .office-fit-metrics {
+        position: absolute;
+        left: 180px;
+        top: 150px;
+        width: 1200px;
+      }
+      .office-fit-metric-line {
+        display: flex;
+        align-items: flex-end;
+        gap: 20px;
+        width: 720px;
+        margin: 24px 0;
+      }
+      .office-fit-cost .label {
+        display: block;
+        margin: 0;
+        font-size: 14px;
+        line-height: 20px;
+        font-weight: 700;
+        color: #4b5563;
+      }
+      .office-fit-metric-line .value {
+        font-size: 76px;
+        line-height: 80px;
+        font-weight: 700;
+        color: #f24726;
+      }
+      .office-fit-metric-line .copy {
+        font-size: 23px;
+        line-height: 30px;
+        color: #0e1b2c;
+      }
+      .office-fit-cost {
+        width: 720px;
+        height: 131px;
+        margin-top: 34px;
+        padding-top: 22px;
+        border-top: 1px solid #d1d5db;
+      }
+      .office-fit-cost strong {
+        display: inline;
+        font-size: 43px;
+        line-height: 64.5px;
+        color: #ba1e1e;
+      }
+      .office-fit-cost .support {
+        display: block;
+        font-size: 16px;
+        line-height: 23px;
+        color: #4b5563;
+      }
+      .office-fit-bar {
+        position: absolute;
+        left: 180px;
+        top: 600px;
+        width: 620px;
+        height: 54px;
+        display: flex;
+        align-items: center;
+        padding-left: 22px;
+        border-radius: 27px;
+        background: #24558e;
+        color: #ffffff;
+        font-size: 20px;
+        line-height: 24px;
+        font-weight: 700;
+      }
+      .office-fit-bar small {
+        margin-left: 20px;
+        font-size: 15px;
+        line-height: 20px;
+        font-weight: 400;
+      }
+      .office-list-card {
+        position: absolute;
+        left: 180px;
+        top: 150px;
+        width: 920px;
+        height: 560px;
+        padding: 42px 52px;
+        border: 1px solid #e2b86f;
+        border-radius: 14px;
+        background: #fff5e7;
+      }
+      .office-list-card h3 {
+        margin: 0;
+        color: #975300;
+        font-size: 31px;
+        line-height: 38px;
+        font-weight: 400;
+      }
+      .office-list-card ul {
+        margin: 24px 0 0;
+        padding-left: 34px;
+        color: #4b5563;
+        font-size: 24px;
+        line-height: 32px;
+      }
+      .office-list-card li {
+        margin: 17px 0;
+      }
+      .office-list-card .list-note {
+        margin-top: 18px;
+        color: #4b5563;
+        font-size: 18px;
+        line-height: 24px;
+      }
+      .office-axis-label {
+        position: absolute;
+        color: #6b7280;
+        font-size: 15px;
+        line-height: 22.5px;
+        white-space: nowrap;
+      }
+      .office-axis-label.first {
+        left: 420px;
+        top: 400px;
+        width: 232px;
+      }
+      .office-axis-label.second {
+        left: 940px;
+        top: 500px;
+        width: 278px;
+        color: #096e66;
+        font-size: 18px;
+        line-height: 27px;
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -346,6 +474,38 @@
           <p>Ergebnisse, Kapazität und Entscheidungen werden gemeinsam geführt und bleiben lesbar.</p>
         </div>
       </div>
+    </section>
+
+    <section class="slide" data-slide-id="office-single-line-metrics">
+      <div class="office-fit-metrics">
+        <div class="office-fit-metric-line">
+          <div class="value">2,6 Mio. €</div>
+          <div class="copy">nachgewiesener<br>Ergebnisbeitrag 2026</div>
+        </div>
+        <div class="office-fit-cost">
+          <div class="label">LAUFENDE PLATTFORM-, MODELL- UND INTEGRATIONSKOSTEN</div>
+          <strong>4,1 Mio. €</strong>
+          <div class="support">höher als im Business Case angenommen</div>
+        </div>
+        <div class="office-fit-bar">5–10 %<small>12 Monate</small></div>
+      </div>
+    </section>
+
+    <section class="slide" data-slide-id="office-list-footer-spacing">
+      <div class="office-list-card">
+        <h3>Vor Freigabe der jeweiligen Welle zu klären</h3>
+        <ul>
+          <li>Keine belastbare Schätzung der Einsparungen liegt vor.</li>
+          <li>Rechtliche Bewertung einzelner Vereinfachungen ist noch nicht abgeschlossen.</li>
+          <li>Eine Zusage der beteiligten Personalvertretungen liegt noch nicht vor.</li>
+        </ul>
+        <div class="list-note">Diese Punkte sind offene Unsicherheiten, keine stillschweigenden Annahmen.</div>
+      </div>
+    </section>
+
+    <section class="slide" data-slide-id="office-single-line-axis-labels">
+      <div class="office-axis-label first" data-pptx-rendered-lines="1">Wirksame, aber teure Einzellösung</div>
+      <div class="office-axis-label second" data-pptx-rendered-lines="1">Vertiefung · gesamter Wertstrom</div>
     </section>
 
     <script>

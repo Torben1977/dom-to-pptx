@@ -1057,12 +1057,17 @@ export function isTextContainer(node) {
   // decorated blocks and positioned children remain independent PPTX objects.
   const isPlainFlowBlock = (el) => {
     const tag = (el?.tagName || '').toLowerCase();
-    if (!['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote'].includes(tag)) {
+    // Semantic inline tags are often promoted to block layout for a card lead
+    // or explanatory line. Their computed layout, not their HTML tag name,
+    // determines whether they belong to the same editable text flow.
+    if (!['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'span', 'strong', 'b', 'em', 'i', 'small', 'mark', 'a'].includes(tag)) {
       return false;
     }
 
     const style = window.getComputedStyle(el);
     if (style.display !== 'block') return false;
+    const parentDisplay = el.parentElement ? window.getComputedStyle(el.parentElement).display : '';
+    if (parentDisplay.includes('flex') || parentDisplay.includes('grid')) return false;
     if (style.position && style.position !== 'static') return false;
     if (style.float && style.float !== 'none') return false;
     if (style.transform && style.transform !== 'none') return false;
