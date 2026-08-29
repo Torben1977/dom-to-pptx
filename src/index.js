@@ -1301,7 +1301,7 @@ function countParagraphs(node, scale, pseudoContentByNode = null) {
 }
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
-const TEXT_FIT_RESERVE_RATIO = 0.04;
+const TEXT_FIT_RESERVE_RATIO = 0.01;
 
 /**
  * Ask PowerPoint to shrink text only when the browser reports overflow or
@@ -1309,8 +1309,11 @@ const TEXT_FIT_RESERVE_RATIO = 0.04;
  * authored font sizes; unconditional normAutofit lets Office silently reduce
  * mixed text runs because its line metrics differ from Chromium's.
  */
-function getPowerPointTextFit(node, style) {
+function getPowerPointTextFit(node, style, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const effectiveReserveRatio =
+    Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
 
   const rect = node.getBoundingClientRect();
   const fallbackClientWidth = Math.max(
@@ -1332,6 +1335,16 @@ function getPowerPointTextFit(node, style) {
 
   if (clientWidth <= 0 || clientHeight <= 0) return 'shrink';
 
+  const contentWidth = Math.max(
+    0,
+    clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+  );
+  const contentHeight = Math.max(
+    0,
+    clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0)
+  );
+  if (contentWidth <= 0 || contentHeight <= 0) return 'shrink';
+
   try {
     const range = node.ownerDocument.createRange();
     range.selectNodeContents(node);
@@ -1341,16 +1354,15 @@ function getPowerPointTextFit(node, style) {
     const contentRect = range.getBoundingClientRect();
     range.detach();
 
-    const contentHeight = contentRect.height || 0;
+    const renderedContentHeight = contentRect.height || 0;
     const widestLine = lineRects.reduce((maximum, lineRect) => Math.max(maximum, lineRect.width), 0);
-    const reserveFactor = 1 - TEXT_FIT_RESERVE_RATIO;
-    // Range geometry is already laid out inside the browser's padded client
-    // box. Subtracting CSS padding here a second time would classify visually
-    // fitting padded pills/cards as overflow and re-enable destructive Office
-    // autofit. scrollWidth/scrollHeight above remain the hard overflow signal.
-    const verticalRisk = contentHeight > 0 && contentHeight > clientHeight * reserveFactor;
+    const reserveFactor = 1 - effectiveReserveRatio;
+    // Range geometry excludes the element's padding, so compare it with the
+    // matching content box rather than the padded client box. The emitted PPTX
+    // margins consume the same padding and leave only this inner area for text.
+    const verticalRisk = renderedContentHeight > 0 && renderedContentHeight > contentHeight * reserveFactor;
     const nowrap = style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre';
-    const horizontalRisk = nowrap && widestLine > 0 && widestLine > clientWidth * reserveFactor;
+    const horizontalRisk = nowrap && widestLine > 0 && widestLine > contentWidth * reserveFactor;
     return verticalRisk || horizontalRisk ? 'shrink' : null;
   } catch {
     // If a DOM implementation cannot provide line boxes, the already checked
@@ -1394,7 +1406,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
     }
 
-    const textFit = getPowerPointTextFit(parent, style);
+    const textFit = getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
     return {
       items: [
         {
@@ -1756,7 +1768,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         });
       }
 
-      const textFit = getPowerPointTextFit(node, style);
+      const textFit = getPowerPointTextFit(node, style, globalOptions._textFitReserveRatio);
       items.push({
         type: 'text',
         zIndex: parentSortKey.concat([0, -1]),
@@ -2129,7 +2141,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         valign,
         margin,
         rtlMode: isRtl,
-        fit: getPowerPointTextFit(node, style),
+        fit: getPowerPointTextFit(node, style, globalOptions._textFitReserveRatio),
       };
     }
   }
@@ -2294,7 +2306,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const transparency = (1 - finalAlpha) * 100;
     const useSolidFill = (bgColorObj.hex && !isImageWrapper) || customShapeName;
 
-    if (hasPartialBorderRadius && useSolidFill && !customShapeName) {
+    const useAsymmetricVisual = hasPartialBorderRadius && !customShapeName && (useSolidFill || hasUniformBorder);
+
+    if (useAsymmetricVisual) {
       const shapeSvg = generateCustomShapeSVG(
         widthPx,
         heightPx,

@@ -39,6 +39,7 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test:office-roundtrip": "npm run build && node scripts/run-office-roundtrip.mjs",
+    "calibrate:text-fit": "npm run build && node scripts/calibrate-text-fit-reserve.mjs",
     "test:watch": "vitest",
     "build": "npx rollup -c",
     "prepare": "rollup -c",

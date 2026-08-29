@@ -46,6 +46,15 @@ const html = `
           height: 60px;
           background: #d92d20;
         }
+        .clip-text-child {
+          position: absolute;
+          left: 150px;
+          top: 80px;
+          width: 120px;
+          height: 30px;
+          background: #f79009;
+          color: #ffffff;
+        }
         .transform-parent {
           position: absolute;
           left: 300px;
@@ -86,6 +95,18 @@ const html = `
           border-radius: 48px 0 0 0;
           font: 700 28px/1.2 Arial, sans-serif;
         }
+        .asymmetric-border-card {
+          position: absolute;
+          left: 120px;
+          top: 100px;
+          width: 360px;
+          height: 180px;
+          padding: 24px;
+          background: transparent;
+          border: 6px solid #b91c1c;
+          border-radius: 48px 0 0 0;
+          font: 700 28px/1.2 Arial, sans-serif;
+        }
         x-status-icon {
           position: absolute;
           left: 120px;
@@ -123,6 +144,7 @@ const html = `
       <section class="slide">
         <div class="clip-parent">
           <div class="clip-child"></div>
+          <div class="clip-text-child">CLIPPED_TEXT</div>
         </div>
       </section>
 
@@ -184,6 +206,10 @@ const html = `
 
       <section class="slide">
         <x-mixed-icon></x-mixed-icon>
+      </section>
+
+      <section class="slide">
+        <div class="asymmetric-border-card">ASYMMETRIC_BORDER_CARD</div>
       </section>
 
       <script>
@@ -303,7 +329,7 @@ describe('known renderer boundaries', () => {
     expect(shapeWithFill(documentNode, 'D92D20')).toBeDefined();
   });
 
-  it('clips an overflowing child to the geometry of its overflow-hidden ancestor', async () => {
+  it('clips an axis-aligned empty solid child to its overflow-hidden ancestor', async () => {
     const documentNode = await slideDocument(2);
     const child = shapeWithFill(documentNode, 'D92D20');
 
@@ -313,6 +339,19 @@ describe('known renderer boundaries', () => {
       y: 120 * EMU_PER_PX,
       w: 50 * EMU_PER_PX,
       h: 60 * EMU_PER_PX,
+    });
+  });
+
+  it.fails('clips text-bearing children to the geometry of their overflow-hidden ancestor', async () => {
+    const documentNode = await slideDocument(2);
+    const child = shapeWithFill(documentNode, 'F79009');
+
+    expect(child).toBeDefined();
+    expect(transformOf(child)).toMatchObject({
+      x: 250 * EMU_PER_PX,
+      y: 180 * EMU_PER_PX,
+      w: 50 * EMU_PER_PX,
+      h: 30 * EMU_PER_PX,
     });
   });
 
@@ -452,6 +491,34 @@ describe('known renderer boundaries', () => {
   it('does not classify visible Shadow-DOM text plus an SVG as SVG-only', async () => {
     const documentNode = await slideDocument(11);
     expect(documentNode.getElementsByTagName('asvg:svgBlip')).toHaveLength(0);
+  });
+
+  it.fails('preserves visible mixed Shadow-DOM text instead of dropping the shadow tree', async () => {
+    const documentNode = await slideDocument(11);
+    expect(documentNode.documentElement.textContent).toContain('VISIBLE_SHADOW_TEXT');
+  });
+
+  it('preserves a transparent border-only asymmetric card behind editable text', async () => {
+    const documentNode = await slideDocument(12);
+    const relationships = await slideRelationshipsDocument(12);
+    const textShape = drawingShapes(documentNode).find((shape) =>
+      Array.from(shape.getElementsByTagName('a:t')).some((node) => node.textContent === 'ASYMMETRIC_BORDER_CARD')
+    );
+    expect(textShape).toBeDefined();
+    expect(textShape.getElementsByTagName('a:prstGeom')[0]?.getAttribute('prst')).toBe('rect');
+
+    const vectorPicture = Array.from(documentNode.getElementsByTagName('p:pic')).find(
+      (picture) => picture.getElementsByTagName('asvg:svgBlip').length === 1
+    );
+    expect(vectorPicture).toBeDefined();
+    const embedId = vectorPicture.getElementsByTagName('asvg:svgBlip')[0].getAttribute('r:embed');
+    const relationship = Array.from(relationships.getElementsByTagName('Relationship')).find(
+      (entry) => entry.getAttribute('Id') === embedId
+    );
+    const mediaPath = `ppt/${relationship.getAttribute('Target').replace(/^\.\.\//, '')}`;
+    const media = await zip.file(mediaPath).async('string');
+    expect(media).toMatch(/<path[^>]+fill="none"/i);
+    expect(media).toMatch(/stroke="#b91c1c"/i);
   });
 
   it('completes a partial colgroup with the browser-measured implicit columns', async () => {

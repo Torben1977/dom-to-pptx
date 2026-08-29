@@ -518,6 +518,7 @@ export function generateCustomShapeSVG(w, h, color, opacity, radii, border = nul
   };
 
   const path = roundedPath(0, { tl, tr, br, bl });
+  const fillPath = color ? `<path d="${path}" fill="#${color}" fill-opacity="${opacity}" />` : '';
   let borderPath = '';
   if (border?.color && border.width > 0) {
     const inset = border.width / 2;
@@ -532,7 +533,7 @@ export function generateCustomShapeSVG(w, h, color, opacity, radii, border = nul
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-      <path d="${path}" fill="#${color}" fill-opacity="${opacity}" />
+      ${fillPath}
       ${borderPath}
     </svg>`;
 
