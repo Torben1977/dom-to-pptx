@@ -1986,25 +1986,6 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     borderTopLeftRadius !== borderBottomRightRadius ||
     borderTopLeftRadius !== borderBottomLeftRadius;
 
-  const tempBg = parseColor(style.backgroundColor);
-  const isTxt = isTextContainerCached(node, globalOptions._textContainerCache);
-  const hasContent = node.textContent.trim().length > 0 || node.children.length > 0;
-
-  if (hasPartialBorderRadius && tempBg.hex && !isTxt && !hasContent && !customShapeName) {
-    const shapeSvg = generateCustomShapeSVG(widthPx, heightPx, tempBg.hex, tempBg.opacity, {
-      tl: parseFloat(style.borderTopLeftRadius) || 0,
-      tr: parseFloat(style.borderTopRightRadius) || 0,
-      br: parseFloat(style.borderBottomRightRadius) || 0,
-      bl: parseFloat(style.borderBottomLeftRadius) || 0,
-    });
-
-    items.push({
-      type: 'image',
-      zIndex: parentSortKey.concat([-Infinity]),
-      domOrder,
-      options: { data: shapeSvg, x, y, w, h, rotate: rotation },
-    });
-  }
   let bgJob = null;
 
   // --- SYNC: Standard CSS Extraction ---
@@ -2089,18 +2070,33 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           layoutValign = verticalTextAlignment(style.alignItems, blockStart);
         }
       } else if (isFlex) {
+        const flexDirection = style.flexDirection || 'row';
+        const isReverse = flexDirection === 'row-reverse' || flexDirection === 'column-reverse';
+        const resolveFlexHorizontal = (value, reverse = false) => {
+          if (value === 'center') return 'center';
+          const logicalStartOnRight = isRtl;
+          const flexStartOnRight = isRtl !== reverse;
+          if (value === 'start') return logicalStartOnRight ? 'right' : 'left';
+          if (value === 'end') return logicalStartOnRight ? 'left' : 'right';
+          if (value === 'flex-start') return flexStartOnRight ? 'right' : 'left';
+          if (value === 'flex-end') return flexStartOnRight ? 'left' : 'right';
+          return null;
+        };
+        const resolveFlexVertical = (value, reverse = false) => {
+          if (value === 'center') return 'middle';
+          if (value === 'start') return 'top';
+          if (value === 'end') return 'bottom';
+          if (value === 'flex-start') return reverse ? 'bottom' : 'top';
+          if (value === 'flex-end') return reverse ? 'top' : 'bottom';
+          return null;
+        };
+
         if (isVertical || isColumn) {
-          if (style.alignItems === 'center') layoutAlign = 'center';
-          if (style.alignItems === 'flex-end' || style.alignItems === 'end') layoutAlign = 'right';
-
-          if (style.justifyContent === 'center') layoutValign = 'middle';
-          if (style.justifyContent === 'flex-end') layoutValign = 'bottom';
+          layoutAlign = resolveFlexHorizontal(style.alignItems);
+          layoutValign = resolveFlexVertical(style.justifyContent, isReverse);
         } else {
-          if (style.alignItems === 'center') layoutValign = 'middle';
-          if (style.alignItems === 'flex-end' || style.alignItems === 'end') layoutValign = 'bottom';
-
-          if (style.justifyContent === 'center') layoutAlign = 'center';
-          if (style.justifyContent === 'flex-end' || style.justifyContent === 'end') layoutAlign = 'right';
+          layoutAlign = resolveFlexHorizontal(style.justifyContent, isReverse);
+          layoutValign = resolveFlexVertical(style.alignItems);
         }
       }
       if (layoutAlign) align = layoutAlign;
