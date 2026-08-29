@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.7] - 2026-08-29
+
+### Fixed
+
+- Compared rendered text with the CSS content box instead of the padded client box before enabling PowerPoint shrink-to-fit.
+- Reduced the default text-fit reserve to one percent so browser-fitting padded cards keep their authored font size while genuinely tight or overflowing text remains protected.
+- Preserved transparent, asymmetrically rounded border-only cards as vector decoration behind editable text.
+
+### Added
+
+- Added a LibreOffice calibration fixture for measuring text-fit reserve behavior and explicit regression coverage for unresolved clipping and Shadow-DOM boundaries.
+
 ## [2.1.1-orglith.6] - 2026-08-29
 
 ### Fixed
