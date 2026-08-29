@@ -410,13 +410,66 @@ export function getBorderInfo(style, scale) {
   }
 }
 
+function resolveRadiusComponent(token, axisLength) {
+  const value = String(token || '0').trim();
+  if (!value) return 0;
+  const parsed = parseFloat(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return value.endsWith('%') ? (parsed / 100) * axisLength : parsed;
+}
+
 /**
- * Generates an SVG image for composite borders that respects border-radius.
+ * Resolves the computed per-corner CSS radius values against the correct box
+ * axes. CSS keeps percentage radii relative to width on the x-axis and height
+ * on the y-axis, even when a corner is expressed with a single percentage.
  */
-export function generateCompositeBorderSVG(w, h, radius, sides) {
-  radius = radius / 2; // Adjust for SVG rendering
+export function resolveCssCornerRadii(style, w, h) {
+  const resolveCorner = (value) => {
+    const tokens = String(value || '0').trim().split(/\s+/).filter(Boolean);
+    const xToken = tokens[0] || '0';
+    const yToken = tokens[1] || xToken;
+    return {
+      x: resolveRadiusComponent(xToken, w),
+      y: resolveRadiusComponent(yToken, h),
+    };
+  };
+
+  const radii = {
+    tl: resolveCorner(style.borderTopLeftRadius),
+    tr: resolveCorner(style.borderTopRightRadius),
+    br: resolveCorner(style.borderBottomRightRadius),
+    bl: resolveCorner(style.borderBottomLeftRadius),
+  };
+
+  // CSS scales all corner radii by one common factor if adjacent radii would
+  // overlap. Applying the same rule keeps the SVG contour equal to the box the
+  // browser painted.
+  const factor = Math.min(
+    1,
+    w / (radii.tl.x + radii.tr.x) || 1,
+    w / (radii.bl.x + radii.br.x) || 1,
+    h / (radii.tl.y + radii.bl.y) || 1,
+    h / (radii.tr.y + radii.br.y) || 1
+  );
+  if (factor < 1) {
+    Object.values(radii).forEach((corner) => {
+      corner.x *= factor;
+      corner.y *= factor;
+    });
+  }
+  return radii;
+}
+
+/**
+ * Generates an SVG image for composite borders that follows the rounded CSS
+ * contour. Each side owns the two adjacent quarter-arcs, matching the visual
+ * result of one-sided borders on elliptical boxes.
+ */
+export function generateCompositeBorderSVG(w, h, radii, sides) {
   const clipId = 'clip_' + Math.random().toString(36).substr(2, 9);
-  let borderRects = '';
+  let borderItems = '';
+
+  const hasRoundedCorner = Object.values(radii).some((corner) => corner.x > 0 || corner.y > 0);
 
   const dashAttributes = (side) => {
     if (side.style === 'dashed') {
@@ -433,40 +486,82 @@ export function generateCompositeBorderSVG(w, h, radius, sides) {
     `stroke="#${side.color}" stroke-opacity="${side.opacity ?? 1}" ` +
     `stroke-width="${side.width}" ${dashAttributes(side)} />`;
 
-  if (sides.top.width > 0 && sides.top.color) {
-    borderRects +=
+  const arcOrLine = (rx, ry, sweep, x, y) =>
+    rx > 0 && ry > 0 ? `A ${rx} ${ry} 0 0 ${sweep} ${x} ${y}` : `L ${x} ${y}`;
+
+  const roundedSidePath = (sideName, side) => {
+    const half = side.width / 2;
+    const inset = (corner) => ({
+      x: Math.max(0, corner.x - half),
+      y: Math.max(0, corner.y - half),
+    });
+    const tl = inset(radii.tl);
+    const tr = inset(radii.tr);
+    const br = inset(radii.br);
+    const bl = inset(radii.bl);
+    let path;
+
+    if (sideName === 'top') {
+      path = `M ${half} ${radii.tl.y} ${arcOrLine(tl.x, tl.y, 1, radii.tl.x, half)} ` +
+        `L ${w - radii.tr.x} ${half} ${arcOrLine(tr.x, tr.y, 1, w - half, radii.tr.y)}`;
+    } else if (sideName === 'right') {
+      path = `M ${w - radii.tr.x} ${half} ${arcOrLine(tr.x, tr.y, 1, w - half, radii.tr.y)} ` +
+        `L ${w - half} ${h - radii.br.y} ${arcOrLine(br.x, br.y, 1, w - radii.br.x, h - half)}`;
+    } else if (sideName === 'bottom') {
+      path = `M ${w - half} ${h - radii.br.y} ${arcOrLine(br.x, br.y, 1, w - radii.br.x, h - half)} ` +
+        `L ${radii.bl.x} ${h - half} ${arcOrLine(bl.x, bl.y, 1, half, h - radii.bl.y)}`;
+    } else {
+      path = `M ${radii.tl.x} ${half} ${arcOrLine(tl.x, tl.y, 0, half, radii.tl.y)} ` +
+        `L ${half} ${h - radii.bl.y} ${arcOrLine(bl.x, bl.y, 0, radii.bl.x, h - half)}`;
+    }
+
+    return `<path d="${path}" fill="none" stroke="#${side.color}" ` +
+      `stroke-opacity="${side.opacity ?? 1}" stroke-width="${side.width}" ${dashAttributes(side)} />`;
+  };
+
+  const addSide = (sideName, side, squareItem) => {
+    if (!(side.width > 0 && side.color)) return;
+    borderItems += hasRoundedCorner ? roundedSidePath(sideName, side) : squareItem;
+  };
+
+  addSide(
+    'top',
+    sides.top,
       sides.top.style === 'dashed' || sides.top.style === 'dotted'
         ? line(sides.top, 0, sides.top.width / 2, w, sides.top.width / 2)
-        : `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`;
-  }
-  if (sides.right.width > 0 && sides.right.color) {
-    borderRects +=
+        : `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`
+  );
+  addSide(
+    'right',
+    sides.right,
       sides.right.style === 'dashed' || sides.right.style === 'dotted'
         ? line(sides.right, w - sides.right.width / 2, 0, w - sides.right.width / 2, h)
-        : `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`;
-  }
-  if (sides.bottom.width > 0 && sides.bottom.color) {
-    borderRects +=
+        : `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`
+  );
+  addSide(
+    'bottom',
+    sides.bottom,
       sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
         ? line(sides.bottom, 0, h - sides.bottom.width / 2, w, h - sides.bottom.width / 2)
-        : `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`;
-  }
-  if (sides.left.width > 0 && sides.left.color) {
-    borderRects +=
+        : `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`
+  );
+  addSide(
+    'left',
+    sides.left,
       sides.left.style === 'dashed' || sides.left.style === 'dotted'
         ? line(sides.left, sides.left.width / 2, 0, sides.left.width / 2, h)
-        : `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`;
-  }
+        : `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`
+  );
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
         <defs>
             <clipPath id="${clipId}">
-                <rect x="0" y="0" width="${w}" height="${h}" rx="${radius}" ry="${radius}" />
+                <rect x="0" y="0" width="${w}" height="${h}" />
             </clipPath>
         </defs>
         <g clip-path="url(#${clipId})">
-            ${borderRects}
+            ${borderItems}
         </g>
     </svg>`;
 

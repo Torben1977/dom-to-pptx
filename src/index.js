@@ -24,6 +24,7 @@ import {
   generateBlurredSVG,
   getBorderInfo,
   generateCompositeBorderSVG,
+  resolveCssCornerRadii,
   generateCustomShapeSVG,
   getUsedFontFamilies,
   getAutoDetectedFonts,
@@ -2482,7 +2483,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     }
 
     if (hasCompositeBorder) {
-      const borderSvgData = generateCompositeBorderSVG(widthPx, heightPx, borderRadiusValue, borderInfo.sides);
+      const borderSvgData = generateCompositeBorderSVG(
+        widthPx,
+        heightPx,
+        resolveCssCornerRadii(style, widthPx, heightPx),
+        borderInfo.sides
+      );
       if (borderSvgData) {
         items.push({
           type: 'image',

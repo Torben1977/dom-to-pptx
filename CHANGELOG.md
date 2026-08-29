@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.8] - 2026-08-29
+
+### Fixed
+
+- Resolved percentage and elliptical CSS corner radii against the correct width and height axes for composite borders.
+- Preserved one-sided borders on rounded and elliptical elements as curved vector paths instead of flattening them into straight rails.
+
+### Added
+
+- Added unit and real Chromium-to-PPTX regression coverage for percentage-radius composite borders.
+
 ## [2.1.1-orglith.7] - 2026-08-29
 
 ### Fixed
