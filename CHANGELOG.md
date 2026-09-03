@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.10] - 2026-09-03
+
+### Fixed
+
+- Kept browser-measured single-line text eligible for normal PowerPoint wrapping unless CSS explicitly requires `white-space: nowrap` or `pre`, preventing long titles and questions from overflowing their authored text boxes.
+- Preserved the existing geometry reserve and no-shrink behavior for short single-line metrics and anonymous browser line fragments.
+
 ## [2.1.1-orglith.9] - 2026-08-29
 
 ### Fixed

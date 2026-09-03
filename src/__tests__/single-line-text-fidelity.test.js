@@ -17,7 +17,7 @@ function shapeGeometry(shape) {
 }
 
 describe('browser single-line fidelity', () => {
-  it('keeps natural-width metrics and anonymous flex labels on one PowerPoint line', async () => {
+  it('reserves natural-width text while preserving resolved anonymous line fragments', async () => {
     const html = `
       <!doctype html>
       <html>
@@ -58,7 +58,7 @@ describe('browser single-line fidelity', () => {
 
     for (const text of ['2,6 Mio. €', '12 Monate']) {
       const shape = shapeFor(xml, text);
-      expect(shape).toContain('wrap="none"');
+      expect(shape).toContain('wrap="square"');
       expect(shape).not.toContain('<a:normAutofit');
       expect(shape).not.toContain('<a:spAutoFit');
     }
@@ -73,7 +73,7 @@ describe('browser single-line fidelity', () => {
     expect(Number(anonymousBarLabel.match(/<a:ext cx="\d+" cy="(\d+)"/)?.[1])).toBeGreaterThan(150_000);
 
     const costShape = shapeFor(xml, '4,1 Mio. €');
-    expect(costShape).toContain('wrap="none"');
+    expect(costShape).toContain('wrap="square"');
     expect(costShape).not.toContain('<a:normAutofit');
     const width = Number(costShape.match(/<a:ext cx="(\d+)"/)?.[1]);
     const height = Number(costShape.match(/<a:ext cx="\d+" cy="(\d+)"/)?.[1]);
@@ -83,7 +83,7 @@ describe('browser single-line fidelity', () => {
     expect(height).toBeGreaterThan(400_000);
   }, 40_000);
 
-  it('honors a normalized browser line-count contract without measuring the frozen DOM again', async () => {
+  it('treats a normalized browser line count as geometry evidence rather than a no-wrap contract', async () => {
     const html = `
       <!doctype html>
       <html><body style="margin:0">
@@ -103,7 +103,49 @@ describe('browser single-line fidelity', () => {
     const zip = await JSZip.loadAsync(buffer);
     const xml = await zip.file('ppt/slides/slide1.xml').async('string');
 
-    expect(shapeFor(xml, 'Fixed browser snapshot contract')).toContain('wrap="none"');
+    expect(shapeFor(xml, 'Fixed browser snapshot contract')).toContain('wrap="square"');
+  }, 40_000);
+
+  it('keeps the real Campus title and decision question wrappable after single-line measurement', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          .slide { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: white; }
+          .title { position: absolute; left: 68px; top: 72px; width: 1200px;
+            font: 700 50px/58px Arial, sans-serif; color: #0f1c2e; }
+          .question { position: absolute; left: 900px; top: 290px; width: 930px; height: 340px;
+            padding: 36px 42px; border-left: 8px solid #a85a00; background: #fff5e6; }
+          .question h2 { margin: 24px 0 0; font: 400 34px/43px Arial, sans-serif; }
+        </style>
+      </head>
+      <body>
+        <section class="slide">
+          <h1 class="title">Gemeinsame Fachstandards verbindlicher steuern – lokale Verantwortung bleibt.</h1>
+          <div class="question">
+            <h2>Welche Richtung soll als Arbeitshypothese für eine begrenzte Erprobung dienen?</h2>
+          </div>
+        </section>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+    expect(shapeFor(xml, 'Gemeinsame Fachstandards verbindlicher steuern – lokale Verantwortung bleibt.')).toContain(
+      'wrap="square"'
+    );
+    expect(shapeFor(xml, 'Welche Richtung soll als Arbeitshypothese für eine begrenzte Erprobung dienen?')).toContain(
+      'wrap="square"'
+    );
   }, 40_000);
 
   it('clamps anonymous flex text reserve before the next flex item', async () => {
@@ -130,16 +172,18 @@ describe('browser single-line fidelity', () => {
     expect(anonymous.right).toBeLessThanOrEqual(neighbor.x);
   }, 40_000);
 
-  it('reserves geometry instead of shrinking a normalized one-line axis label', async () => {
+  it('reserves geometry while honoring explicit CSS no-wrap contracts', async () => {
     const html = `
       <!doctype html>
       <html><body style="margin:0">
         <section class="slide" style="position:relative;width:1920px;height:1080px;background:#fff">
-          <div data-pptx-rendered-lines="1" style="position:absolute;left:1004.69px;top:436.5px;
+          <div style="position:absolute;left:1004.69px;top:436.5px;
             width:232.312px;height:22.5px;overflow:visible;white-space:nowrap;
             font:400 15px/22.5px Arial,sans-serif;color:#6b7280">
             Wirksame, aber teure Einzellösung
           </div>
+          <div style="position:absolute;left:1004.69px;top:500px;width:300px;height:30px;
+            white-space:pre;font:400 15px/22.5px Arial,sans-serif;color:#6b7280">Preformatted label</div>
         </section>
       </body></html>
     `;
@@ -156,5 +200,6 @@ describe('browser single-line fidelity', () => {
     expect(shape).toContain('wrap="none"');
     expect(shape).not.toContain('<a:normAutofit');
     expect(width).toBeGreaterThan(1_500_000);
+    expect(shapeFor(xml, 'Preformatted label')).toContain('wrap="none"');
   }, 40_000);
 });

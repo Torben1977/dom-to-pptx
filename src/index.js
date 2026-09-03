@@ -1593,12 +1593,14 @@ function renderedTextLineCount(node) {
   }
 }
 
-function preservesBrowserSingleLine(node, style) {
+function isRenderedSingleLine(node) {
   const contractOwner = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
   if (contractOwner?.dataset?.pptxRenderedLines === '1') return true;
-  if (style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre') return true;
-  if (style.whiteSpace !== 'normal') return false;
   return renderedTextLineCount(node) === 1;
+}
+
+function requiresPowerPointNoWrap(style) {
+  return style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre';
 }
 
 function clampAnonymousTextReserve(node, rect, width, height) {
@@ -1837,7 +1839,7 @@ function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERV
 }
 
 function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
-  if (!node?.parentElement || !preservesBrowserSingleLine(node, style)) return rect;
+  if (!node?.parentElement || !isRenderedSingleLine(node)) return rect;
   const effectiveReserveRatio =
     Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
   if (effectiveReserveRatio === 0) return rect;
@@ -1939,7 +1941,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     range.detach();
 
     const style = window.getComputedStyle(parent);
-    const preserveSingleLine = preservesBrowserSingleLine(node, style);
+    const renderedSingleLine = isRenderedSingleLine(node);
     const effectiveReserveRatio =
       Number.isFinite(globalOptions._textFitReserveRatio) &&
       globalOptions._textFitReserveRatio >= 0 &&
@@ -1947,8 +1949,8 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         ? globalOptions._textFitReserveRatio
         : TEXT_FIT_RESERVE_RATIO;
     const lineHeightPx = parseFloat(style.lineHeight) || rect.height;
-    const reservedWidthPx = preserveSingleLine ? rect.width * (1 + effectiveReserveRatio) : rect.width;
-    const reservedHeightPx = preserveSingleLine
+    const reservedWidthPx = renderedSingleLine ? rect.width * (1 + effectiveReserveRatio) : rect.width;
+    const reservedHeightPx = renderedSingleLine
       ? Math.max(rect.height, lineHeightPx) * (1 + effectiveReserveRatio)
       : rect.height;
     const clampedSize = clampAnonymousTextReserve(node, rect, reservedWidthPx, reservedHeightPx);
@@ -1974,7 +1976,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     // Anonymous flex/grid text items have no DOM box of their own. Preserve
     // their browser line box plus the Office metric reserve instead of asking
     // Office to shrink an exact glyph box.
-    const textFit = preserveSingleLine ? null : getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
+    const textFit = renderedSingleLine ? null : getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
     return {
       items: [
         {
@@ -1987,9 +1989,10 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
               options: textOpts,
             },
           ],
-          // Honor CSS white-space: a `nowrap`/`pre` element must not re-wrap in
-          // the exported slide (otherwise a single line measured in the browser
-          // can wrap in PowerPoint/LibreOffice due to font-metric differences).
+          // This object represents a browser-resolved anonymous line fragment,
+          // not the parent's CSS layout box. Re-wrapping a one-line fragment in
+          // Office would introduce a second layout decision (notably between
+          // explicit <br> boundaries). Multi-line fragments remain wrappable.
           options: {
             x,
             y,
@@ -1997,7 +2000,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             h: unrotatedH,
             margin: 0,
             ...(textFit && { fit: textFit }),
-            wrap: !preserveSingleLine,
+            wrap: !(requiresPowerPointNoWrap(style) || renderedSingleLine),
           },
         },
       ],
@@ -2734,15 +2737,15 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         padding[0] * 72, // top
       ];
 
-      const preserveSingleLine = preservesBrowserSingleLine(node, style);
+      const renderedSingleLine = isRenderedSingleLine(node);
       textPayload = {
         text: textParts,
         align,
         valign,
         margin,
         rtlMode: isRtl,
-        wrap: !preserveSingleLine,
-        fit: preserveSingleLine || lineRect ? null : getPowerPointTextFit(node, style),
+        wrap: !requiresPowerPointNoWrap(style),
+        fit: renderedSingleLine || lineRect ? null : getPowerPointTextFit(node, style),
       };
     }
   }
@@ -2754,7 +2757,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     hasUniformBorder ||
     hasCompositeBorder ||
     hasShadow;
-  if (textPayload && !hasOwnPaint && rotation === 0 && preservesBrowserSingleLine(node, style)) {
+  if (textPayload && !hasOwnPaint && rotation === 0 && isRenderedSingleLine(node)) {
     // A resolved float region is already the complete browser line box, not a
     // natural-width glyph box. Expanding it against the parent's full content
     // area would move the text back underneath the float.
