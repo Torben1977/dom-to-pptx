@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.11] - 2026-09-04
+
+### Fixed
+
+- Applied the existing single-line text-metric reserve to painted intrinsic-width badges so PowerPoint keeps browser-single-line labels on one line.
+- Distinguished intrinsic auto widths from explicitly sized and left/right-stretched boxes to preserve authored shape geometry.
+
 ## [2.1.1-orglith.10] - 2026-09-03
 
 ### Fixed

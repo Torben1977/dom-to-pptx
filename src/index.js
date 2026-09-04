@@ -1878,6 +1878,26 @@ function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RE
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
 
+// CSS `width:auto` is intrinsic only in shrink-to-fit formatting contexts. A
+// normal block or an absolutely positioned box with both insets set stretches.
+function usesIntrinsicInlineSize(node, style) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+  try {
+    const styleMap = typeof node.computedStyleMap === 'function' ? node.computedStyleMap() : null;
+    const width = styleMap?.get('width');
+    const value = width ? String(width).trim().toLowerCase() : '';
+    if (value === 'max-content' || value === 'min-content' || value.startsWith('fit-content')) return true;
+    if (value !== 'auto') return false;
+    if (style.display.startsWith('inline') || style.float !== 'none') return true;
+    if (!['absolute', 'fixed'].includes(style.position)) return false;
+    const left = String(styleMap?.get('left') || '').trim().toLowerCase();
+    const right = String(styleMap?.get('right') || '').trim().toLowerCase();
+    return left === 'auto' || right === 'auto';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ask PowerPoint to shrink text only when the browser reports real overflow.
  * The metric reserve is represented by text-box geometry elsewhere; using it
@@ -2757,7 +2777,8 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     hasUniformBorder ||
     hasCompositeBorder ||
     hasShadow;
-  if (textPayload && !hasOwnPaint && rotation === 0 && isRenderedSingleLine(node)) {
+  const canReserveSingleLineGeometry = !hasOwnPaint || usesIntrinsicInlineSize(node, style);
+  if (textPayload && canReserveSingleLineGeometry && rotation === 0 && isRenderedSingleLine(node)) {
     // A resolved float region is already the complete browser line box, not a
     // natural-width glyph box. Expanding it against the parent's full content
     // area would move the text back underneath the float.

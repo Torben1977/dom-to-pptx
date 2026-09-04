@@ -16,6 +16,10 @@ function shapeGeometry(shape) {
   return { x, width, right: x + width };
 }
 
+function cssPxToEmu(px) {
+  return Math.round((px / 144) * 914_400);
+}
+
 describe('browser single-line fidelity', () => {
   it('reserves natural-width text while preserving resolved anonymous line fragments', async () => {
     const html = `
@@ -201,5 +205,50 @@ describe('browser single-line fidelity', () => {
     expect(shape).not.toContain('<a:normAutofit');
     expect(width).toBeGreaterThan(1_500_000);
     expect(shapeFor(xml, 'Preformatted label')).toContain('wrap="none"');
+  }, 40_000);
+
+  it('reserves the full geometry of painted intrinsic-width single-line badges', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          .slide { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: white; }
+          .badge { position: absolute; right: 160px; top: 280px; padding: 14px 18px;
+            border-radius: 12px; color: #065dc9; font: 700 16px/20px Arial, sans-serif; }
+          .painted { background: #fff; }
+          .fixed { left: 160px; right: auto; width: 240px; }
+          .stretched { left: 160px; right: 160px; width: auto; }
+        </style>
+      </head>
+      <body>
+        <section class="slide"><div class="badge painted">operativ verankert</div></section>
+        <section class="slide"><div class="badge">operativ verankert</div></section>
+        <section class="slide"><div class="badge painted fixed">fixed painted label</div></section>
+        <section class="slide"><div class="badge painted stretched">stretched painted label</div></section>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const paintedXml = await zip.file('ppt/slides/slide1.xml').async('string');
+    const plainXml = await zip.file('ppt/slides/slide2.xml').async('string');
+    const fixedXml = await zip.file('ppt/slides/slide3.xml').async('string');
+    const stretchedXml = await zip.file('ppt/slides/slide4.xml').async('string');
+    const painted = shapeGeometry(shapeFor(paintedXml, 'operativ verankert'));
+    const plain = shapeGeometry(shapeFor(plainXml, 'operativ verankert'));
+    const fixed = shapeGeometry(shapeFor(fixedXml, 'fixed painted label'));
+    const stretched = shapeGeometry(shapeFor(stretchedXml, 'stretched painted label'));
+
+    expect(Math.abs(painted.width - plain.width)).toBeLessThanOrEqual(1_000);
+    expect(Math.abs(painted.right - plain.right)).toBeLessThanOrEqual(1_000);
+    expect(Math.abs(fixed.width - cssPxToEmu(240))).toBeLessThanOrEqual(1_000);
+    expect(Math.abs(stretched.width - cssPxToEmu(1600))).toBeLessThanOrEqual(1_000);
   }, 40_000);
 });
