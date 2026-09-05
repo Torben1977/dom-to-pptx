@@ -93,6 +93,22 @@ To achieve the highest fidelity and most reliable rendering in PowerPoint, consi
   - `<img src="...">` tags support the common `object-fit` and
     `object-position` cases. Complex crop/radius combinations require the media
     fidelity tests and are not described as pixel-perfect by default.
+  - Static PNG, JPEG and WebP sources are embedded without re-encoding when
+    they fill their picture bounds without cropping, padding or rounded masks
+    and fit within the existing 2x target-resolution ceiling. Oversized originals
+    still downsample, so small image tiles do not embed unnecessarily large files.
+    CORS-readable URLs and blob URLs use their response MIME type. Sources that
+    require rasterization retain the existing 2x output ceiling but do not exceed
+    their available pixel density after fitting. SVG keeps the vector-source
+    rasterization resolution instead of being capped to intrinsic dimensions.
+  - Rasterized WebP remains WebP at browser encoder quality 1, preserving alpha.
+    This is maximum-quality **lossy** re-encoding, not lossless WebP. PNG inputs
+    and other raster fallbacks remain PNG. A browser without a WebP encoder may
+    return PNG, whose actual MIME header is passed to the PPTX writer.
+  - Direct WebP was checked in PowerPoint for Mac 16.112.3 and LibreOffice
+    26.2.5.2. Windows, older Office versions, and animated WebP are not certified
+    by these checks. Run `npm run test:office-roundtrip` on the target renderer
+    to test the exported crop, alpha and opacity in addition to package structure.
   - CSS `background-image: url(...)` is also natively parsed. It correctly handles `background-size` (cover/contain) and translates them into matching image crop parameters in PPTX.
   - CSS `background-image: linear-gradient(...)` transforms into pure vector SVG gradients without requiring rasterization.
 - **Writing Modes:** Modern CSS `writing-mode` (`vertical-rl`, `vertical-lr`) properties are supported. Combine them with `text-orientation: upright` to natively tap into PowerPoint's Stacked Vertical Text engine, or leave defaults to map to standard East-Asian rotated text layouts.

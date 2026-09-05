@@ -55,7 +55,9 @@ function splitCssPosition(value) {
 }
 
 function resolvePositionComponent(value, freeSpace) {
-  const token = String(value || '').trim().toLowerCase();
+  const token = String(value || '')
+    .trim()
+    .toLowerCase();
   if (token === 'left' || token === 'top') return 0;
   if (token === 'center') return freeSpace / 2;
   if (token === 'right' || token === 'bottom') return freeSpace;
@@ -121,31 +123,36 @@ function traceRoundedRect(ctx, targetW, targetH, radii) {
   ctx.closePath();
 }
 
+async function imageDataSource(src) {
+  if (src.startsWith('data:')) return src;
+  try {
+    // Resolve the response MIME, not the filename (signed URLs and blob URLs
+    // often have no extension). Reuse these bytes for decoding and embedding.
+    const response = await fetch(src);
+    if (!response.ok) return src;
+    const blob = await response.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(src);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    // Some file/CORS environments permit Image loading but not fetch.
+    return src;
+  }
+}
+
 export async function getProcessedImage(src, targetW, targetH, radius, objectFit = 'fill', objectPosition = '50% 50%') {
+  if (!src || !Number.isFinite(targetW) || !Number.isFinite(targetH) || targetW <= 0 || targetH <= 0) return null;
+  const source = await imageDataSource(src);
+  const mime = /^data:(image\/[^;,]+)/i.exec(source)?.[1].toLowerCase();
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
 
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const scale = 2; // Double resolution
-      canvas.width = targetW * scale;
-      canvas.height = targetH * scale;
-      const ctx = canvas.getContext('2d');
-      ctx.scale(scale, scale);
-
       const r = normalizeImageCornerRadii(radius, targetW, targetH);
-
-      // 1. Draw Mask
-      ctx.beginPath();
-      traceRoundedRect(ctx, targetW, targetH, r);
-      ctx.fillStyle = '#000';
-      ctx.fill();
-
-      // 2. Composite Source-In
-      ctx.globalCompositeOperation = 'source-in';
-
-      // 3. Draw Image with Object Fit logic
       const wRatio = targetW / img.width;
       const hRatio = targetH / img.height;
       let renderW, renderH;
@@ -179,12 +186,52 @@ export async function getProcessedImage(src, targetW, targetH, radius, objectFit
         renderH
       );
 
-      ctx.drawImage(img, renderX, renderY, renderW, renderH);
+      const hasRadius = Object.values(r).some(({ x, y }) => x > 0 && y > 0);
+      const fillsBox =
+        Math.abs(renderW - targetW) < 1e-6 &&
+        Math.abs(renderH - targetH) < 1e-6 &&
+        Math.abs(renderX) < 1e-6 &&
+        Math.abs(renderY) < 1e-6;
+      if (
+        !hasRadius &&
+        fillsBox &&
+        img.width <= targetW * 2 &&
+        img.height <= targetH * 2 &&
+        /;base64,/i.test(source) &&
+        ['image/png', 'image/jpeg', 'image/webp'].includes(mime)
+      ) {
+        // PowerPoint already stretches the picture to its layout bounds.
+        // Within the resolution ceiling, encoding again adds no geometry and
+        // loses the source compression. Oversized originals still downsample.
+        resolve(source);
+        return;
+      }
 
-      resolve(canvas.toDataURL('image/png'));
+      try {
+        const canvas = document.createElement('canvas');
+        // Keep the existing 2x ceiling, but do not invent raster detail beyond
+        // the source's pixel density after fitting. SVG remains resolution-free.
+        const scale = !mime || mime === 'image/svg+xml' ? 2 : Math.min(2, img.width / renderW, img.height / renderH);
+        canvas.width = Math.max(1, Math.round(targetW * scale));
+        canvas.height = Math.max(1, Math.round(targetH * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.scale(canvas.width / targetW, canvas.height / targetH);
+        ctx.beginPath();
+        traceRoundedRect(ctx, targetW, targetH, r);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-in';
+        ctx.drawImage(img, renderX, renderY, renderW, renderH);
+        // Preserve alpha for crop/padding/masks. PNG inputs remain lossless;
+        // transformed WebP uses the browser's maximum-quality WebP encoder.
+        // Browsers without that encoder return PNG with its actual MIME header.
+        resolve(mime === 'image/webp' ? canvas.toDataURL('image/webp', 1) : canvas.toDataURL('image/png'));
+      } catch {
+        resolve(null);
+      }
     };
 
     img.onerror = () => resolve(null);
-    img.src = src;
+    img.src = source;
   });
 }

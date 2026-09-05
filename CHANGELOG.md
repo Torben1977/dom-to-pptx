@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.12] - 2026-09-05
+
+### Fixed
+
+- Preserve static PNG, JPEG and WebP source bytes when cropping or masking is unnecessary and the source fits the target resolution budget.
+- Keep transformed WebP images in WebP with alpha support and maximum browser encoder quality; avoid upscaling beyond available raster detail while retaining the existing 2x ceiling.
+- Bound oversized originals in small image tiles and preserve MIME-correct PNG fallback when WebP encoding is unavailable.
+
+### Tests
+
+- Add HTML-to-PPTX regression coverage for image codecs, source bytes, crop, alpha, opacity, links, background images, blob URLs and fallback behavior.
+- Extend the LibreOffice round-trip suite to verify exported WebP crop, rounded transparency and picture opacity.
+
 ## [2.1.1-orglith.11] - 2026-09-04
 
 ### Fixed
