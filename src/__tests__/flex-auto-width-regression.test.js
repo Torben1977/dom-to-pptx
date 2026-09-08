@@ -48,7 +48,7 @@ describe('auto-width flex text fidelity', () => {
       const painted = shapeFor(paintedXml, text);
       const unreserved = width(shapeFor(unreservedXml, text));
       expect(width(painted), text).toBeGreaterThan(unreserved * 1.055);
-      expect(width(painted), text).toBeLessThan(unreserved * 1.061);
+      expect(width(painted), text).toBeLessThan(unreserved * 1.121);
       expect(painted).toContain('wrap="square"');
       expect(painted).not.toContain('<a:normAutofit');
     }
@@ -60,6 +60,38 @@ describe('auto-width flex text fidelity', () => {
         next.x
       );
     }
+    expect(width(shapeFor(paintedXml, 'Review'))).toBeGreaterThan(width(shapeFor(unreservedXml, 'Review')) * 1.115);
+  }, 40_000);
+
+  it('reserves enough width for several bold auto-width pills in one row', async () => {
+    const buffer = await exportHtmlToPptx(FIXTURE, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const unreservedBuffer = await exportHtmlToPptx(FIXTURE, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false, _textFitReserveRatio: 0 },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const unreservedZip = await JSZip.loadAsync(unreservedBuffer);
+    const xml = await zip.file('ppt/slides/slide4.xml').async('string');
+    const unreservedXml = await unreservedZip.file('ppt/slides/slide4.xml').async('string');
+
+    for (const text of AUTO_LABELS) {
+      const pill = shapeFor(xml, text);
+      const unreserved = width(shapeFor(unreservedXml, text));
+      expect(width(pill), text).toBeGreaterThan(unreserved * 1.055);
+      expect(width(pill), text).toBeLessThan(unreserved * 1.121);
+      expect(pill).toContain('wrap="square"');
+      expect(pill).not.toContain('<a:normAutofit');
+    }
+
+    for (let index = 0; index < AUTO_LABELS.length - 1; index++) {
+      const current = geometry(shapeFor(xml, AUTO_LABELS[index]));
+      const next = geometry(shapeFor(xml, AUTO_LABELS[index + 1]));
+      expect(current.right, `${AUTO_LABELS[index]} overlaps ${AUTO_LABELS[index + 1]}`).toBeLessThanOrEqual(next.x + 1);
+    }
+    expect(width(shapeFor(xml, 'Review'))).toBeGreaterThan(width(shapeFor(unreservedXml, 'Review')) * 1.115);
   }, 40_000);
 
   it('preserves constrained, explicit-break, and ordinary paragraph wrapping', async () => {

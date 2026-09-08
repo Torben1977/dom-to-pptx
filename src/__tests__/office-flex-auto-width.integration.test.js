@@ -73,6 +73,11 @@ officeDescribe('LibreOffice auto-width flex round trip', () => {
     for (const label of AUTO_LABELS) expect(lines, label).toContain(label);
   });
 
+  it('keeps several bold auto-width pills on one rendered line', () => {
+    const lines = pageLines(4);
+    for (const label of AUTO_LABELS) expect(lines, label).toContain(label);
+  });
+
   it('preserves deliberate line breaks and normal word wrapping', () => {
     const lines = pageLines(3);
     expect(lines).toContain('Erste Zeile');

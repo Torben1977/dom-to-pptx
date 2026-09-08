@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.14] - 2026-09-09
+
+### Fixed
+
+- Increase the targeted auto-width flex-label reserve from six to twelve percent after the first released candidate still wrapped bold 34 px labels such as `Review`.
+- Keep the reserve clamped before adjacent flex and grid items.
+
+### Tests
+
+- Add a real Chromium and LibreOffice regression for five bold auto-width pills in one row.
+
 ## [2.1.1-orglith.13] - 2026-09-09
 
 ### Fixed

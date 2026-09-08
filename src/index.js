@@ -1560,7 +1560,7 @@ function collapseVerticalMargins(first, second) {
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
 const TEXT_FIT_RESERVE_RATIO = 0.03;
-const AUTO_FLEX_TEXT_FIT_RESERVE_RATIO = 0.06;
+const AUTO_FLEX_TEXT_FIT_RESERVE_RATIO = 0.12;
 
 function renderedTextLineCount(node) {
   if (!node?.ownerDocument) return null;
