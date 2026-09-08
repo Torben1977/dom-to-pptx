@@ -1560,6 +1560,7 @@ function collapseVerticalMargins(first, second) {
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
 const TEXT_FIT_RESERVE_RATIO = 0.03;
+const AUTO_FLEX_TEXT_FIT_RESERVE_RATIO = 0.06;
 
 function renderedTextLineCount(node) {
   if (!node?.ownerDocument) return null;
@@ -1838,6 +1839,34 @@ function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERV
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
 
+function isAutoSizedHorizontalFlexItem(node, style, styleMap = null) {
+  if (!node?.parentElement || node.nodeType !== Node.ELEMENT_NODE) return false;
+  try {
+    const resolvedStyleMap = styleMap || (typeof node.computedStyleMap === 'function' ? node.computedStyleMap() : null);
+    const width = String(resolvedStyleMap?.get('width') || '')
+      .trim()
+      .toLowerCase();
+    if (width !== 'auto') return false;
+
+    const parentStyle = window.getComputedStyle(node.parentElement);
+    if (parentStyle.display !== 'flex' && parentStyle.display !== 'inline-flex') return false;
+    if (!(parentStyle.flexDirection || 'row').startsWith('row')) return false;
+
+    const flexBasis = String(resolvedStyleMap?.get('flex-basis') || style.flexBasis || '')
+      .trim()
+      .toLowerCase();
+    const flexGrow = parseFloat(style.flexGrow) || 0;
+    const usesContentBasis =
+      flexBasis === 'auto' ||
+      flexBasis === 'content' ||
+      flexBasis === 'max-content' ||
+      flexBasis.startsWith('fit-content');
+    return flexGrow === 0 && usesContentBasis;
+  } catch {
+    return false;
+  }
+}
+
 function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
   if (!node?.parentElement || !isRenderedSingleLine(node)) return rect;
   const effectiveReserveRatio =
@@ -1856,11 +1885,20 @@ function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RE
   const contentBottom =
     parentRect.bottom - (parseFloat(parentStyle.borderBottomWidth) || 0) - (parseFloat(parentStyle.paddingBottom) || 0);
 
-  const desiredWidth = rect.width * (1 + effectiveReserveRatio);
+  const widthReserveRatio = isAutoSizedHorizontalFlexItem(node, style)
+    ? Math.max(effectiveReserveRatio, AUTO_FLEX_TEXT_FIT_RESERVE_RATIO)
+    : effectiveReserveRatio;
+  const desiredWidth = rect.width * (1 + widthReserveRatio);
   const lineHeight = parseFloat(style.lineHeight) || rect.height;
   const desiredHeight = Math.max(rect.height, lineHeight) * (1 + effectiveReserveRatio);
-  const width = Math.min(desiredWidth, Math.max(rect.width, contentRight - contentLeft));
-  const height = Math.min(desiredHeight, Math.max(rect.height, contentBottom - contentTop));
+  // The rendered border box already reflects the selected font face and
+  // weight, letter spacing, padding, and borders. Reserve that measured box,
+  // then keep normal-flow flex/grid items out of the next item's box.
+  const layoutClamp = ['absolute', 'fixed'].includes(style.position)
+    ? { width: desiredWidth, height: desiredHeight }
+    : clampAnonymousTextReserve(node, rect, desiredWidth, desiredHeight);
+  const width = Math.min(layoutClamp.width, Math.max(rect.width, contentRight - contentLeft));
+  const height = Math.min(layoutClamp.height, Math.max(rect.height, contentBottom - contentTop));
   const horizontalDelta = Math.max(0, width - rect.width);
   const verticalDelta = Math.max(0, height - rect.height);
 
@@ -1878,8 +1916,8 @@ function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RE
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
 
-// CSS `width:auto` is intrinsic only in shrink-to-fit formatting contexts. A
-// normal block or an absolutely positioned box with both insets set stretches.
+// CSS `width:auto` is intrinsic in shrink-to-fit formatting contexts and for
+// non-growing items on a horizontal flex main axis.
 function usesIntrinsicInlineSize(node, style) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
   try {
@@ -1889,6 +1927,9 @@ function usesIntrinsicInlineSize(node, style) {
     if (value === 'max-content' || value === 'min-content' || value.startsWith('fit-content')) return true;
     if (value !== 'auto') return false;
     if (style.display.startsWith('inline') || style.float !== 'none') return true;
+
+    if (isAutoSizedHorizontalFlexItem(node, style, styleMap)) return true;
+
     if (!['absolute', 'fixed'].includes(style.position)) return false;
     const left = String(styleMap?.get('left') || '').trim().toLowerCase();
     const right = String(styleMap?.get('right') || '').trim().toLowerCase();

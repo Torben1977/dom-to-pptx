@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        color: #142033;
+      }
+      .slide {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        padding: 80px;
+        background: #f6f8fb;
+      }
+      h1 {
+        margin: 0 0 44px;
+        font:
+          700 48px/53px Arial,
+          sans-serif;
+      }
+      .label {
+        margin: 0 0 12px;
+        font:
+          700 18px/24px Arial,
+          sans-serif;
+        color: #596579;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        width: 1760px;
+        margin-bottom: 46px;
+      }
+      .pill {
+        flex: 0 1 auto;
+        width: auto;
+        padding: 15px 23px;
+        border-radius: 999px;
+        color: #174ea6;
+        font:
+          700 34px/42px Arial,
+          sans-serif;
+        letter-spacing: 0.35px;
+      }
+      .badge {
+        flex: 0 1 auto;
+        width: auto;
+        padding: 11px 17px;
+        border-radius: 12px;
+        color: #6e3900;
+        font:
+          600 30px/38px Arial,
+          sans-serif;
+        letter-spacing: 0.2px;
+      }
+      .painted .pill {
+        background: #eaf1ff;
+        border: 2px solid #2b6ff2;
+      }
+      .painted .badge {
+        background: #fff1dc;
+        border: 1px solid #8d4c00;
+      }
+      .plain .pill {
+        padding-left: 25px;
+        padding-right: 25px;
+        border: 0;
+      }
+      .plain .badge {
+        padding-left: 18px;
+        padding-right: 18px;
+        border: 0;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 430px 600px 600px;
+        gap: 36px;
+        align-items: start;
+      }
+      .narrow,
+      .explicit,
+      .normal {
+        padding: 18px;
+        border: 1px solid #aab3c0;
+        background: #fff;
+        font:
+          400 28px/36px Arial,
+          sans-serif;
+      }
+      .narrow {
+        width: 430px;
+      }
+      .explicit,
+      .normal {
+        width: 600px;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="slide painted">
+      <h1>Bemalte automatisch breite Flex-Elemente</h1>
+      <div class="label">Kurzes Pill</div>
+      <div class="row"><div class="pill" data-case="decision">Entscheidung jetzt</div></div>
+      <div class="label">Unterschiedlich lange Prozess-Badges</div>
+      <div class="row">
+        <div class="badge" data-case="interaction">Wechselwirkung</div>
+        <div class="badge" data-case="inputs">Ausgangswerte</div>
+        <div class="badge" data-case="implementation">Umsetzung</div>
+        <div class="badge" data-case="review">Review</div>
+      </div>
+    </section>
+    <section class="slide plain">
+      <h1>Geometrische Referenz ohne eigene Bemalung</h1>
+      <div class="label">Kurzes Pill</div>
+      <div class="row"><div class="pill">Entscheidung jetzt</div></div>
+      <div class="label">Unterschiedlich lange Prozess-Badges</div>
+      <div class="row">
+        <div class="badge">Wechselwirkung</div>
+        <div class="badge">Ausgangswerte</div>
+        <div class="badge">Umsetzung</div>
+        <div class="badge">Review</div>
+      </div>
+    </section>
+    <section class="slide">
+      <h1>Kontrollfälle für bewusstes Umbrechen</h1>
+      <div class="controls">
+        <div>
+          <div class="label">Absichtlich schmal</div>
+          <div class="narrow" data-case="narrow">
+            Dieser Text soll weiterhin regulär zwischen Wörtern umbrechen können.
+          </div>
+        </div>
+        <div>
+          <div class="label">Expliziter Umbruch</div>
+          <div class="explicit" data-case="explicit">Erste Zeile<br />Zweite Zeile</div>
+        </div>
+        <div>
+          <div class="label">Normaler Absatz</div>
+          <div class="normal" data-case="normal">
+            Normaler Absatztext bleibt in seiner begrenzten Textbox und verhält sich unverändert.
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

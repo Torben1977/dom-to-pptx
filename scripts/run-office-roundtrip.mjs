@@ -5,7 +5,13 @@ import process from 'node:process';
 const vitest = path.resolve('node_modules/vitest/vitest.mjs');
 const result = spawnSync(
   process.execPath,
-  [vitest, 'run', 'src/__tests__/office-roundtrip.integration.test.js', 'src/__tests__/image-codec-regression.test.js'],
+  [
+    vitest,
+    'run',
+    'src/__tests__/office-roundtrip.integration.test.js',
+    'src/__tests__/office-flex-auto-width.integration.test.js',
+    'src/__tests__/image-codec-regression.test.js',
+  ],
   {
     stdio: 'inherit',
     env: { ...process.env, DOM_TO_PPTX_OFFICE_ROUNDTRIP: '1' },

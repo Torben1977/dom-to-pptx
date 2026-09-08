@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.13] - 2026-09-09
+
+### Fixed
+
+- Recognize non-growing, content-sized items on horizontal Flexbox axes as intrinsic-width text shapes even though their computed display is `block`.
+- Reserve a calibrated six percent of the rendered border-box width for those short single-line labels and clamp the reserve before the next flex or grid item.
+- Keep fixed-width paragraphs, explicit line breaks, normal word wrapping, and editable PowerPoint text unchanged.
+
+### Tests
+
+- Add real Chromium-to-PPTX coverage for painted pills and process badges, constrained paragraphs, explicit `<br>` breaks, and ordinary text.
+- Add a LibreOffice PDF round trip that verifies the rendered labels remain on one line.
+
 ## [2.1.1-orglith.12] - 2026-09-05
 
 ### Fixed
