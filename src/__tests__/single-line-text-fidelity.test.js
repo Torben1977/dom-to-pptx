@@ -21,7 +21,7 @@ function cssPxToEmu(px) {
 }
 
 describe('browser single-line fidelity', () => {
-  it('reserves natural-width text while preserving resolved anonymous line fragments', async () => {
+  it('preserves intrinsic text intent and resolved anonymous line fragments', async () => {
     const html = `
       <!doctype html>
       <html>
@@ -60,14 +60,16 @@ describe('browser single-line fidelity', () => {
     const zip = await JSZip.loadAsync(buffer);
     const xml = await zip.file('ppt/slides/slide1.xml').async('string');
 
-    for (const text of ['2,6 Mio. €', '12 Monate']) {
+    for (const text of ['12 Monate']) {
       const shape = shapeFor(xml, text);
-      expect(shape).toContain('wrap="square"');
+      expect(shape).toContain('wrap="none"');
       expect(shape).not.toContain('<a:normAutofit');
       expect(shape).not.toContain('<a:spAutoFit');
     }
 
     const primaryMetric = shapeFor(xml, '2,6 Mio. €');
+    expect(primaryMetric).toContain('wrap="none"');
+    expect(primaryMetric).not.toContain('<a:normAutofit');
     expect(Number(primaryMetric.match(/<a:ext cx="(\d+)"/)?.[1])).toBeGreaterThan(2_000_000);
 
     const anonymousBarLabel = shapeFor(xml, '5–10 %');
@@ -77,7 +79,7 @@ describe('browser single-line fidelity', () => {
     expect(Number(anonymousBarLabel.match(/<a:ext cx="\d+" cy="(\d+)"/)?.[1])).toBeGreaterThan(150_000);
 
     const costShape = shapeFor(xml, '4,1 Mio. €');
-    expect(costShape).toContain('wrap="square"');
+    expect(costShape).toContain('wrap="none"');
     expect(costShape).not.toContain('<a:normAutofit');
     const width = Number(costShape.match(/<a:ext cx="(\d+)"/)?.[1]);
     const height = Number(costShape.match(/<a:ext cx="\d+" cy="(\d+)"/)?.[1]);
@@ -152,7 +154,7 @@ describe('browser single-line fidelity', () => {
     );
   }, 40_000);
 
-  it('clamps anonymous flex text reserve before the next flex item', async () => {
+  it('clamps anonymous flex text geometry before the next flex item', async () => {
     const html = `
       <!doctype html>
       <html><body style="margin:0">
@@ -176,7 +178,7 @@ describe('browser single-line fidelity', () => {
     expect(anonymous.right).toBeLessThanOrEqual(neighbor.x);
   }, 40_000);
 
-  it('reserves geometry while honoring explicit CSS no-wrap contracts', async () => {
+  it('keeps authored geometry while honoring explicit CSS no-wrap contracts', async () => {
     const html = `
       <!doctype html>
       <html><body style="margin:0">
@@ -203,11 +205,11 @@ describe('browser single-line fidelity', () => {
 
     expect(shape).toContain('wrap="none"');
     expect(shape).not.toContain('<a:normAutofit');
-    expect(width).toBeGreaterThan(1_500_000);
+    expect(Math.abs(width - cssPxToEmu(232.312))).toBeLessThanOrEqual(cssPxToEmu(1) + 1_000);
     expect(shapeFor(xml, 'Preformatted label')).toContain('wrap="none"');
   }, 40_000);
 
-  it('reserves the full geometry of painted intrinsic-width single-line badges', async () => {
+  it('preserves the full geometry of painted intrinsic-width single-line badges', async () => {
     const html = `
       <!doctype html>
       <html>
@@ -245,10 +247,17 @@ describe('browser single-line fidelity', () => {
     const plain = shapeGeometry(shapeFor(plainXml, 'operativ verankert'));
     const fixed = shapeGeometry(shapeFor(fixedXml, 'fixed painted label'));
     const stretched = shapeGeometry(shapeFor(stretchedXml, 'stretched painted label'));
+    const paintedShape = shapeFor(paintedXml, 'operativ verankert');
+    const plainShape = shapeFor(plainXml, 'operativ verankert');
 
-    expect(Math.abs(painted.width - plain.width)).toBeLessThanOrEqual(1_000);
-    expect(Math.abs(painted.right - plain.right)).toBeLessThanOrEqual(1_000);
+    expect(painted.width).toBeLessThanOrEqual(plain.width);
+    expect(Math.abs(painted.width - plain.width)).toBeLessThanOrEqual(cssPxToEmu(1) + 1_000);
+    expect(Math.abs(painted.right - plain.right)).toBeLessThanOrEqual(cssPxToEmu(1) + 1_000);
     expect(Math.abs(fixed.width - cssPxToEmu(240))).toBeLessThanOrEqual(1_000);
     expect(Math.abs(stretched.width - cssPxToEmu(1600))).toBeLessThanOrEqual(1_000);
+    expect(paintedShape).toContain('wrap="none"');
+    expect(plainShape).toContain('wrap="none"');
+    expect(shapeFor(fixedXml, 'fixed painted label')).toContain('wrap="square"');
+    expect(shapeFor(stretchedXml, 'stretched painted label')).toContain('wrap="square"');
   }, 40_000);
 });

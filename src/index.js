@@ -1559,8 +1559,38 @@ function collapseVerticalMargins(first, second) {
 }
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
-const TEXT_FIT_RESERVE_RATIO = 0.03;
-const AUTO_FLEX_TEXT_FIT_RESERVE_RATIO = 0.12;
+const TEXT_GEOMETRY_TOLERANCE_PX = 1;
+
+function countRenderedTextLines(rects, lineHeight, writingMode = 'horizontal-tb') {
+  const visible = rects.filter((rect) => rect.width > 0 && rect.height > 0);
+  if (visible.length === 0) return null;
+
+  const vertical = writingMode.startsWith('vertical') || writingMode.startsWith('sideways');
+  const entries = visible
+    .map((rect) => ({
+      center: vertical ? (rect.left + rect.right) / 2 : (rect.top + rect.bottom) / 2,
+      extent: vertical ? rect.width : rect.height,
+    }))
+    .sort((first, second) => first.center - second.center);
+  const resolvedLineHeight = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : null;
+  const bands = [];
+
+  for (const entry of entries) {
+    const band = bands.find((candidate) => {
+      const lineBoxExtent = resolvedLineHeight || Math.min(candidate.extent, entry.extent);
+      const sameLineRadius = Math.max(1, lineBoxExtent / 2 - TEXT_FIT_TOLERANCE_PX);
+      return Math.abs(candidate.center - entry.center) < sameLineRadius;
+    });
+    if (band) {
+      band.center = (band.center * band.count + entry.center) / (band.count + 1);
+      band.extent = Math.max(band.extent, entry.extent);
+      band.count += 1;
+    } else {
+      bands.push({ center: entry.center, extent: entry.extent, count: 1 });
+    }
+  }
+  return bands.length;
+}
 
 function renderedTextLineCount(node) {
   if (!node?.ownerDocument) return null;
@@ -1570,25 +1600,11 @@ function renderedTextLineCount(node) {
     const range = node.ownerDocument.createRange();
     if (node.nodeType === Node.TEXT_NODE) range.selectNode(node);
     else range.selectNodeContents(node);
-    const rects = Array.from(range.getClientRects())
-      .filter((rect) => rect.width > 0 && rect.height > 0)
-      .sort((first, second) => first.top - second.top || first.left - second.left);
+    const rects = Array.from(range.getClientRects());
     range.detach();
-    if (rects.length === 0) return null;
-
-    const bands = [];
-    for (const rect of rects) {
-      const matchingBand = bands.find(
-        (band) => rect.top < band.bottom - TEXT_FIT_TOLERANCE_PX && rect.bottom > band.top + TEXT_FIT_TOLERANCE_PX
-      );
-      if (matchingBand) {
-        matchingBand.top = Math.min(matchingBand.top, rect.top);
-        matchingBand.bottom = Math.max(matchingBand.bottom, rect.bottom);
-      } else {
-        bands.push({ top: rect.top, bottom: rect.bottom });
-      }
-    }
-    return bands.length;
+    const style = window.getComputedStyle(node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+    const lineHeight = parseFloat(style.lineHeight);
+    return countRenderedTextLines(rects, lineHeight, style.writingMode);
   } catch {
     return null;
   }
@@ -1604,7 +1620,7 @@ function requiresPowerPointNoWrap(style) {
   return style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre';
 }
 
-function clampAnonymousTextReserve(node, rect, width, height) {
+function clampAnonymousTextGeometry(node, rect, width, height) {
   const parent = node?.parentElement;
   if (!parent) return { width, height };
   const parentStyle = window.getComputedStyle(parent);
@@ -1787,7 +1803,7 @@ function getSiblingFloatTextRect(node, style) {
  * has no anonymous line box, so use the parent's content width for that one
  * editable text shape. Painted/padded inline boxes retain their own geometry.
  */
-function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
+function getStandaloneInlineLineRect(node, style) {
   if (!node?.parentElement || style.display !== 'inline' || renderedTextLineCount(node) !== 1) return null;
   const parent = node.parentElement;
   const parentStyle = window.getComputedStyle(parent);
@@ -1812,8 +1828,6 @@ function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERV
   const endsLine = !next || isBlockFlowBoundary(next);
   if (!startsLine || !endsLine) return null;
 
-  const effectiveReserveRatio =
-    Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
   const parentRect = parent.getBoundingClientRect();
   const contentLeft =
     parentRect.left + (parseFloat(parentStyle.borderLeftWidth) || 0) + (parseFloat(parentStyle.paddingLeft) || 0);
@@ -1825,7 +1839,7 @@ function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERV
   const contentWidth = contentRight - contentLeft;
   if (contentWidth <= ownRect.width + TEXT_FIT_TOLERANCE_PX) return null;
 
-  const desiredWidth = contentWidth * (1 + effectiveReserveRatio);
+  const desiredWidth = contentWidth;
   const availableWidth = paddingRight - paddingLeft;
   const width = Math.min(desiredWidth, availableWidth);
   let left = contentLeft;
@@ -1834,7 +1848,7 @@ function getStandaloneInlineLineRect(node, style, reserveRatio = TEXT_FIT_RESERV
   else if (align === 'center') left = paddingLeft + (availableWidth - width) / 2;
 
   const lineHeight = parseFloat(style.lineHeight) || ownRect.height;
-  const height = Math.max(ownRect.height, lineHeight) * (1 + effectiveReserveRatio);
+  const height = Math.max(ownRect.height, lineHeight);
   const top = ownRect.top - Math.max(0, height - ownRect.height) / 2;
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
@@ -1867,11 +1881,8 @@ function isAutoSizedHorizontalFlexItem(node, style, styleMap = null) {
   }
 }
 
-function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RESERVE_RATIO) {
+function getTolerantSingleLineRect(node, style, rect) {
   if (!node?.parentElement || !isRenderedSingleLine(node)) return rect;
-  const effectiveReserveRatio =
-    Number.isFinite(reserveRatio) && reserveRatio >= 0 && reserveRatio <= 0.25 ? reserveRatio : TEXT_FIT_RESERVE_RATIO;
-  if (effectiveReserveRatio === 0) return rect;
 
   const parent = node.parentElement;
   const parentRect = parent.getBoundingClientRect();
@@ -1885,18 +1896,14 @@ function getReservedSingleLineRect(node, style, rect, reserveRatio = TEXT_FIT_RE
   const contentBottom =
     parentRect.bottom - (parseFloat(parentStyle.borderBottomWidth) || 0) - (parseFloat(parentStyle.paddingBottom) || 0);
 
-  const widthReserveRatio = isAutoSizedHorizontalFlexItem(node, style)
-    ? Math.max(effectiveReserveRatio, AUTO_FLEX_TEXT_FIT_RESERVE_RATIO)
-    : effectiveReserveRatio;
-  const desiredWidth = rect.width * (1 + widthReserveRatio);
+  const desiredWidth = rect.width + TEXT_GEOMETRY_TOLERANCE_PX;
   const lineHeight = parseFloat(style.lineHeight) || rect.height;
-  const desiredHeight = Math.max(rect.height, lineHeight) * (1 + effectiveReserveRatio);
-  // The rendered border box already reflects the selected font face and
-  // weight, letter spacing, padding, and borders. Reserve that measured box,
-  // then keep normal-flow flex/grid items out of the next item's box.
+  const desiredHeight = Math.max(rect.height, lineHeight) + TEXT_GEOMETRY_TOLERANCE_PX;
+  // Keep a one-pixel rounding tolerance inside the available browser layout
+  // without changing the geometry of painted elements.
   const layoutClamp = ['absolute', 'fixed'].includes(style.position)
     ? { width: desiredWidth, height: desiredHeight }
-    : clampAnonymousTextReserve(node, rect, desiredWidth, desiredHeight);
+    : clampAnonymousTextGeometry(node, rect, desiredWidth, desiredHeight);
   const width = Math.min(layoutClamp.width, Math.max(rect.width, contentRight - contentLeft));
   const height = Math.min(layoutClamp.height, Math.max(rect.height, contentBottom - contentTop));
   const horizontalDelta = Math.max(0, width - rect.width);
@@ -1939,10 +1946,14 @@ function usesIntrinsicInlineSize(node, style) {
   }
 }
 
+function hasIntrinsicSingleLineIntent(node, style) {
+  return isRenderedSingleLine(node) && usesIntrinsicInlineSize(node, style);
+}
+
 /**
  * Ask PowerPoint to shrink text only when the browser reports real overflow.
- * The metric reserve is represented by text-box geometry elsewhere; using it
- * as an autofit trigger silently changes authored type sizes in Office.
+ * Text-box geometry is handled separately; using extra width as an autofit
+ * trigger silently changes authored type sizes in Office.
  */
 function getPowerPointTextFit(node, style) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
@@ -2003,18 +2014,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
 
     const style = window.getComputedStyle(parent);
     const renderedSingleLine = isRenderedSingleLine(node);
-    const effectiveReserveRatio =
-      Number.isFinite(globalOptions._textFitReserveRatio) &&
-      globalOptions._textFitReserveRatio >= 0 &&
-      globalOptions._textFitReserveRatio <= 0.25
-        ? globalOptions._textFitReserveRatio
-        : TEXT_FIT_RESERVE_RATIO;
     const lineHeightPx = parseFloat(style.lineHeight) || rect.height;
-    const reservedWidthPx = renderedSingleLine ? rect.width * (1 + effectiveReserveRatio) : rect.width;
-    const reservedHeightPx = renderedSingleLine
-      ? Math.max(rect.height, lineHeightPx) * (1 + effectiveReserveRatio)
+    const tolerantWidthPx = renderedSingleLine ? rect.width + TEXT_GEOMETRY_TOLERANCE_PX : rect.width;
+    const tolerantHeightPx = renderedSingleLine
+      ? Math.max(rect.height, lineHeightPx) + TEXT_GEOMETRY_TOLERANCE_PX
       : rect.height;
-    const clampedSize = clampAnonymousTextReserve(node, rect, reservedWidthPx, reservedHeightPx);
+    const clampedSize = clampAnonymousTextGeometry(node, rect, tolerantWidthPx, tolerantHeightPx);
     const widthPx = clampedSize.width;
     const heightPx = clampedSize.height;
     const unrotatedW = widthPx * PX_TO_INCH * config.scale;
@@ -2035,9 +2040,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     }
 
     // Anonymous flex/grid text items have no DOM box of their own. Preserve
-    // their browser line box plus the Office metric reserve instead of asking
-    // Office to shrink an exact glyph box.
-    const textFit = renderedSingleLine ? null : getPowerPointTextFit(parent, style, globalOptions._textFitReserveRatio);
+    // their browser line box and keep the rounding tolerance inside the
+    // available layout instead of asking Office to shrink an exact glyph box.
+    const textFit = renderedSingleLine ? null : getPowerPointTextFit(parent, style);
     return {
       items: [
         {
@@ -2106,7 +2111,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   const browserRect = node.getBoundingClientRect();
-  const lineRect = getStandaloneInlineLineRect(node, computedStyle, globalOptions._textFitReserveRatio);
+  const lineRect = getStandaloneInlineLineRect(node, computedStyle);
   const floatFlowRect = lineRect ? null : getSiblingFloatTextRect(node, computedStyle);
   const rect = lineRect || floatFlowRect || browserRect;
   if (rect.width < 0.5 || rect.height < 0.5) return null;
@@ -2799,13 +2804,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       ];
 
       const renderedSingleLine = isRenderedSingleLine(node);
+      const singleLineIntent = requiresPowerPointNoWrap(style) || hasIntrinsicSingleLineIntent(node, style);
       textPayload = {
         text: textParts,
         align,
         valign,
         margin,
         rtlMode: isRtl,
-        wrap: !requiresPowerPointNoWrap(style),
+        wrap: !singleLineIntent,
         fit: renderedSingleLine || lineRect ? null : getPowerPointTextFit(node, style),
       };
     }
@@ -2818,17 +2824,17 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     hasUniformBorder ||
     hasCompositeBorder ||
     hasShadow;
-  const canReserveSingleLineGeometry = !hasOwnPaint || usesIntrinsicInlineSize(node, style);
-  if (textPayload && canReserveSingleLineGeometry && rotation === 0 && isRenderedSingleLine(node)) {
+  const canApplySingleLineTolerance = !hasOwnPaint;
+  if (textPayload && canApplySingleLineTolerance && rotation === 0 && isRenderedSingleLine(node)) {
     // A resolved float region is already the complete browser line box, not a
     // natural-width glyph box. Expanding it against the parent's full content
     // area would move the text back underneath the float.
-    const reservedRect =
-      floatFlowRect || getReservedSingleLineRect(node, style, browserRect, globalOptions._textFitReserveRatio);
-    x = config.offX + (reservedRect.left - config.rootX) * PX_TO_INCH * config.scale;
-    y = config.offY + (reservedRect.top - config.rootY) * PX_TO_INCH * config.scale;
-    w = reservedRect.width * PX_TO_INCH * config.scale;
-    h = reservedRect.height * PX_TO_INCH * config.scale;
+    const tolerantRect =
+      floatFlowRect || getTolerantSingleLineRect(node, style, browserRect);
+    x = config.offX + (tolerantRect.left - config.rootX) * PX_TO_INCH * config.scale;
+    y = config.offY + (tolerantRect.top - config.rootY) * PX_TO_INCH * config.scale;
+    w = tolerantRect.width * PX_TO_INCH * config.scale;
+    h = tolerantRect.height * PX_TO_INCH * config.scale;
     textPayload.fit = null;
   }
 

@@ -30,26 +30,21 @@ function cssPxToEmu(px) {
 }
 
 describe('auto-width flex text fidelity', () => {
-  it('adds a bounded reserve to painted auto-width flex labels', async () => {
+  it('keeps painted auto-width flex labels at their browser geometry', async () => {
     const buffer = await exportHtmlToPptx(FIXTURE, {
       selector: '.slide',
       pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
     });
-    const unreservedBuffer = await exportHtmlToPptx(FIXTURE, {
-      selector: '.slide',
-      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false, _textFitReserveRatio: 0 },
-    });
     const zip = await JSZip.loadAsync(buffer);
-    const unreservedZip = await JSZip.loadAsync(unreservedBuffer);
     const paintedXml = await zip.file('ppt/slides/slide1.xml').async('string');
-    const unreservedXml = await unreservedZip.file('ppt/slides/slide1.xml').async('string');
+    const plainXml = await zip.file('ppt/slides/slide2.xml').async('string');
 
     for (const text of AUTO_LABELS) {
       const painted = shapeFor(paintedXml, text);
-      const unreserved = width(shapeFor(unreservedXml, text));
-      expect(width(painted), text).toBeGreaterThan(unreserved * 1.055);
-      expect(width(painted), text).toBeLessThan(unreserved * 1.121);
-      expect(painted).toContain('wrap="square"');
+      const plain = shapeFor(plainXml, text);
+      expect(Math.abs(width(painted) - width(plain)), text).toBeLessThanOrEqual(cssPxToEmu(1) + 1_000);
+      expect(painted).toContain('wrap="none"');
+      expect(plain).toContain('wrap="none"');
       expect(painted).not.toContain('<a:normAutofit');
     }
 
@@ -60,29 +55,19 @@ describe('auto-width flex text fidelity', () => {
         next.x
       );
     }
-    expect(width(shapeFor(paintedXml, 'Review'))).toBeGreaterThan(width(shapeFor(unreservedXml, 'Review')) * 1.115);
   }, 40_000);
 
-  it('reserves enough width for several bold auto-width pills in one row', async () => {
+  it('keeps several bold auto-width pills on one line without growing their boxes', async () => {
     const buffer = await exportHtmlToPptx(FIXTURE, {
       selector: '.slide',
       pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
     });
-    const unreservedBuffer = await exportHtmlToPptx(FIXTURE, {
-      selector: '.slide',
-      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false, _textFitReserveRatio: 0 },
-    });
     const zip = await JSZip.loadAsync(buffer);
-    const unreservedZip = await JSZip.loadAsync(unreservedBuffer);
     const xml = await zip.file('ppt/slides/slide4.xml').async('string');
-    const unreservedXml = await unreservedZip.file('ppt/slides/slide4.xml').async('string');
 
     for (const text of AUTO_LABELS) {
       const pill = shapeFor(xml, text);
-      const unreserved = width(shapeFor(unreservedXml, text));
-      expect(width(pill), text).toBeGreaterThan(unreserved * 1.055);
-      expect(width(pill), text).toBeLessThan(unreserved * 1.121);
-      expect(pill).toContain('wrap="square"');
+      expect(pill).toContain('wrap="none"');
       expect(pill).not.toContain('<a:normAutofit');
     }
 
@@ -91,7 +76,6 @@ describe('auto-width flex text fidelity', () => {
       const next = geometry(shapeFor(xml, AUTO_LABELS[index + 1]));
       expect(current.right, `${AUTO_LABELS[index]} overlaps ${AUTO_LABELS[index + 1]}`).toBeLessThanOrEqual(next.x + 1);
     }
-    expect(width(shapeFor(xml, 'Review'))).toBeGreaterThan(width(shapeFor(unreservedXml, 'Review')) * 1.115);
   }, 40_000);
 
   it('preserves constrained, explicit-break, and ordinary paragraph wrapping', async () => {

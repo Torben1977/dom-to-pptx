@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.15] - 2026-09-09
+
+### Fixed
+
+- Preserve intrinsic single-line CSS intent with PowerPoint no-wrap semantics while keeping painted element geometry equal to the browser border box.
+- Replace proportional text-box expansion with a one-pixel rounding tolerance for unpainted editable text geometry.
+- Count rendered lines by their centers on the CSS block axis so slightly overlapping glyph bounds from adjacent lines remain distinct.
+
+### Removed
+
+- Remove the private percentage-based text-fit calibration path and its width-dependent reserve heuristics.
+
 ## [2.1.1-orglith.14] - 2026-09-09
 
 ### Fixed
