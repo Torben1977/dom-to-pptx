@@ -1592,9 +1592,9 @@ function countRenderedTextLines(rects, lineHeight, writingMode = 'horizontal-tb'
   return bands.length;
 }
 
-function renderedTextLineCount(node) {
+function renderedTextLineCount(node, includeExplicitBreaks = false) {
   if (!node?.ownerDocument) return null;
-  if (node.nodeType === Node.ELEMENT_NODE && node.querySelector?.('br')) return null;
+  if (!includeExplicitBreaks && node.nodeType === Node.ELEMENT_NODE && node.querySelector?.('br')) return null;
 
   try {
     const range = node.ownerDocument.createRange();
@@ -1948,6 +1948,19 @@ function usesIntrinsicInlineSize(node, style) {
 
 function hasIntrinsicSingleLineIntent(node, style) {
   return isRenderedSingleLine(node) && usesIntrinsicInlineSize(node, style);
+}
+
+function hasIntrinsicExplicitLineIntent(node, style, textParts) {
+  if (!usesIntrinsicInlineSize(node, style)) return false;
+
+  const authoredLineCount =
+    1 + textParts.reduce((count, part) => count + (part.options?.breakLine ? 1 : 0), 0);
+  if (authoredLineCount < 2) return false;
+
+  // A hard break or block child creates a PowerPoint paragraph. Disable
+  // PowerPoint reflow only when the browser rendered exactly those authored
+  // rows; any additional line means that real CSS wrapping occurred.
+  return renderedTextLineCount(node, true) === authoredLineCount;
 }
 
 /**
@@ -2804,7 +2817,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       ];
 
       const renderedSingleLine = isRenderedSingleLine(node);
-      const singleLineIntent = requiresPowerPointNoWrap(style) || hasIntrinsicSingleLineIntent(node, style);
+      const explicitLineIntent = hasIntrinsicExplicitLineIntent(node, style, textParts);
+      const singleLineIntent =
+        requiresPowerPointNoWrap(style) || hasIntrinsicSingleLineIntent(node, style) || explicitLineIntent;
       textPayload = {
         text: textParts,
         align,
@@ -2812,7 +2827,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         margin,
         rtlMode: isRtl,
         wrap: !singleLineIntent,
-        fit: renderedSingleLine || lineRect ? null : getPowerPointTextFit(node, style),
+        fit: renderedSingleLine || explicitLineIntent || lineRect ? null : getPowerPointTextFit(node, style),
       };
     }
   }

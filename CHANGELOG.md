@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1-orglith.16] - 2026-09-09
+
+### Fixed
+
+- Preserve authored single-line rows inside intrinsic-width multi-line text containers without allowing PowerPoint to reflow individual rows.
+- Keep PowerPoint wrapping enabled when browser geometry shows that any authored row actually wraps.
+
 ## [2.1.1-orglith.15] - 2026-09-09
 
 ### Fixed

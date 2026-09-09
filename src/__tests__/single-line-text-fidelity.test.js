@@ -21,6 +21,77 @@ function cssPxToEmu(px) {
 }
 
 describe('browser single-line fidelity', () => {
+  it('preserves explicit single-line rows inside an intrinsic-width text container', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          .slide { position: relative; width: 1280px; height: 720px; overflow: hidden; background: white; }
+          .bottomline { position: absolute; left: 64px; right: 64px; bottom: 78px;
+            display: flex; justify-content: space-between; align-items: end; }
+          .metric { font: 700 31pt/34pt Arial, sans-serif; }
+          .metric small { display: block; font: 400 11pt/15pt Arial, sans-serif; }
+        </style>
+      </head>
+      <body>
+        <section class="slide">
+          <div class="bottomline"><span>Context</span><span class="metric">36 Mio. €<small>für 2027–2029</small></span></div>
+        </section>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+    const metric = shapeFor(xml, '36 Mio. €');
+
+    expect(metric).toContain('<a:t>36 Mio. €</a:t>');
+    expect(metric).toContain('<a:t>für 2027–2029</a:t>');
+    expect((metric.match(/<a:p>/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(metric).toContain('wrap="none"');
+    expect(metric).not.toContain('<a:normAutofit');
+  }, 40_000);
+
+  it('keeps PowerPoint wrapping when an authored row wraps in the browser', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          .slide { position: relative; width: 1280px; height: 720px; overflow: hidden; background: white; }
+          .row { display: flex; padding: 64px; }
+          .metric { width: auto; max-width: 180px; font: 700 24pt/28pt Arial, sans-serif; }
+          .metric small { display: block; font: 400 11pt/15pt Arial, sans-serif; }
+        </style>
+      </head>
+      <body>
+        <section class="slide">
+          <div class="row"><span class="metric">A deliberately long browser-wrapped row<small>authored second row</small></span></div>
+        </section>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+    const metric = shapeFor(xml, 'A deliberately long browser-wrapped row');
+
+    expect(metric).toContain('wrap="square"');
+  }, 40_000);
+
   it('preserves intrinsic text intent and resolved anonymous line fragments', async () => {
     const html = `
       <!doctype html>
