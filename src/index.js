@@ -11,7 +11,8 @@ const PptxGenJS = PptxGenJSImport?.default ?? PptxGenJSImport;
 import {
   parseColor,
   getTextStyle,
-  isTextContainer,
+  isTextContainerCached,
+  createShapeMargin,
   getVisibleShadow,
   generateGradientSVG,
   getRotation,
@@ -368,11 +369,6 @@ export async function exportToPptx(target, options = {}) {
  * @param {PptxGenJS.Slide} slide - The PPTX slide object to add content to.
  * @param {PptxGenJS} pptx - The main PPTX instance.
  */
-function isTextContainerCached(node, cache) {
-  if (!cache) return isTextContainer(node);
-  if (!cache.has(node)) cache.set(node, isTextContainer(node));
-  return cache.get(node);
-}
 
 function compareKeys(keyA, keyB) {
   const len = Math.max(keyA.length, keyB.length);
@@ -1335,13 +1331,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const ulPaddingBottom = parseFloat(style.paddingBottom) || 0;
     const ulPaddingLeft = parseFloat(style.paddingLeft) || 0;
 
-    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
-    const listMargin = [
-      ulPaddingLeft * PX_TO_INCH * config.scale * 72,
+    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points.
+    // createShapeMargin normalizes CSS (top, right, bottom, left) to this order.
+    const listMargin = createShapeMargin(
+      ulPaddingTop * PX_TO_INCH * config.scale * 72,
       ulPaddingRight * PX_TO_INCH * config.scale * 72,
       ulPaddingBottom * PX_TO_INCH * config.scale * 72,
-      ulPaddingTop * PX_TO_INCH * config.scale * 72,
-    ];
+      ulPaddingLeft * PX_TO_INCH * config.scale * 72
+    );
 
     liChildren.forEach((child, index) => {
       const liStyle = window.getComputedStyle(child);
@@ -1779,14 +1776,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
 
       const padding = getPadding(style, config.scale);
-      // getPadding returns [top, right, bottom, left]; PptxGenJS consumes the margin
-      // array as [lIns, rIns, bIns, tIns], in points
-      const margin = [
-        padding[3] * 72, // left
+      // getPadding returns [top, right, bottom, left]; createShapeMargin
+      // normalizes it to PptxGenJS's [lIns, rIns, bIns, tIns] point array
+      const margin = createShapeMargin(
+        padding[0] * 72, // top
         padding[1] * 72, // right
         padding[2] * 72, // bottom
-        padding[0] * 72, // top
-      ];
+        padding[3] * 72  // left
+      );
 
       textPayload = { text: textParts, align, valign, margin };
     }

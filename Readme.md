@@ -1,6 +1,6 @@
 # dom-to-pptx
 
-**The High-Fidelity HTML to PowerPoint Converter (v2.1.0)**
+**The High-Fidelity HTML to PowerPoint Converter (v2.1.2)**
 
 [![npm version](https://img.shields.io/npm/v/dom-to-pptx.svg?style=flat-square)](https://www.npmjs.com/package/dom-to-pptx)
 [![npm downloads](https://img.shields.io/npm/dm/dom-to-pptx.svg?style=flat-square)](https://www.npmjs.com/package/dom-to-pptx)
@@ -24,10 +24,12 @@ Most HTML-to-PPTX libraries fail when faced with modern web design. They break o
 
 ## 🎬 What's New in v2.1
 
+- **Resilient Font Auto-Detection (v2.1.2)**: Relative stylesheet paths resolve reliably across headless and jsdom test environments, and cross-origin fallback scanning recursively parses `@import` stylesheet chains.
+- **Dedicated Margin Normalization (v2.1.2)**: `createShapeMargin` and `createTableCellMargin` constructors insulate shape and table insets from upstream PptxGenJS array ordering discrepancies.
+- **Memoized Text Container Engine (v2.1.2)**: Per-export `WeakMap` memoization prevents quadratic style recalculation on deep DOM trees.
 - **Presentation Speaker Notes (`data-pptx-notes`)**: Annotate elements or slide roots with `data-pptx-notes="..."` to automatically generate presenter speaker notes in PowerPoint slides.
 - **Hybrid Pseudo-Element Engine (`::before` / `::after`)**: Full support for CSS pseudo-element decorations, including `linear-gradient` backgrounds, zero-size border triangles, clip-paths, and complex CSS shapes via `html2canvas` capture, plus `--no-pseudo` CLI opt-out.
 - **Custom Viewport & Dimensions**: Full support for `--width` / `--height` custom slide dimensions and `--browser-width` / `--browser-height` headless viewport resolution.
-- **Smart Font Embedding & File Access**: Hardened font embedder with `--allow-file-access-from-files` enabled by default for headless CLI exports.
 
 ## Features
 

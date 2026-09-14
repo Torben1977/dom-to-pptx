@@ -33,7 +33,7 @@ const printHelp = () => {
   console.log('\x1b[1mDescription:\x1b[0m');
   console.log('  An interactive utility to install presentation engineering skills to your AI agents.');
   console.log('  It scans standard user directories for Claude Code, Gemini CLI, Cursor, and Windsurf.');
-  console.log('  You can also install the skill locally to the current folder (\`.agent/skills\`).\n');
+  console.log('  You can also install the skill locally to the current folder (`.agent/skills`).\n');
 };
 
 /**

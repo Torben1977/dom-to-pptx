@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2] - 2026-09-14
+
+### Added
+
+- **Dedicated Margin Normalization Constructors**: Added `createShapeMargin(top, right, bottom, left)` and `createTableCellMargin(top, right, bottom, left)` in `src/utils.js`. Callers consistently provide standard CSS box-model `(top, right, bottom, left)` parameters; the helpers normalize to PptxGenJS's internal requirements (`[left, right, bottom, top]` for shapes and text boxes; `[top, right, bottom, left]` for table cells).
+- **Cross-Origin `@import` Stylesheet Font Detection**: Added `parseImportUrlsFromCssText` in `src/utils.js` and updated `getAutoDetectedFonts` fallback scanning to recursively discover and fetch `@import` stylesheet chains with cycle prevention, extracting `@font-face` definitions declared within nested cross-origin CSS files.
+- **Exported Text-Container Cache Memoizer**: Exported `isTextContainerCached(node, cache)` from `src/utils.js` alongside comprehensive unit tests in `src/__tests__/text-container-cache.test.js`, verifying $O(N)$ text-container classifications and cache isolation across export lifecycles.
+
+### Fixed
+
+- **Relative Font Resolution in Headless & jsdom Environments**: Resolved relative font URL failures when stylesheet paths are relative (e.g. `assets/deck.css`) by anchoring `rawBase` against `document.baseURI` or `window.location.href` via `resolveCssUrl`, preventing WHATWG `TypeError: Invalid base URL` exceptions during font embedding.
+- **Styled Badge & Pill Shape Preservation**: Fixed DOM text container classifier (`isSafeInline`) in `src/utils.js` to treat elements with visible borders or `border-radius` as independent shapes rather than swallowing them into parent text containers as flat text runs, ensuring rounded badge/pill elements retain their native PowerPoint `roundRect` geometry, borders, insets, and fill styling.
+
 ## [2.1.1] - 2026-07-21
 
 ### Fixed
