@@ -17,10 +17,12 @@
       "require": "./dist/dom-to-pptx-node.cjs",
       "default": "./dist/dom-to-pptx-node.cjs"
     },
-    "./skills/*": "./skills/*",
     "./bin/cli-skills-installer.js": "./bin/cli-skills-installer.js",
     "./bin/cli-exporter.js": "./bin/cli-exporter.js"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "dom-to-pptx": "bin/cli-main.js",
     "dom-to-pptx-exporter": "bin/cli-exporter.js",
@@ -29,7 +31,6 @@
   "files": [
     "dist",
     "bin",
-    "skills",
     "Readme.md",
     "CONTRIBUTORS.md",
     "CHANGELOG.md",

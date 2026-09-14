@@ -243,10 +243,28 @@ async function main() {
     }
 
     // Execution
-    const sourceDir = path.join(__dirname, '..', 'skills', 'dom-to-pptx-skill');
+    let subpackageSkillsDir = null;
+    try {
+      // If dom-to-pptx-skills is installed in node_modules or linked
+      const skillsPkgJson = import.meta.resolve ? import.meta.resolve('dom-to-pptx-skills/package.json') : null;
+      if (skillsPkgJson) {
+        subpackageSkillsDir = path.join(fileURLToPath(skillsPkgJson), '..', 'skills', 'dom-to-pptx-skill');
+      }
+    } catch {
+      // Ignored if not found
+    }
 
-    if (!fs.existsSync(sourceDir)) {
-      throw new Error(`Source skills not found at ${sourceDir}. Are you running from the package root?`);
+    const candidates = [
+      subpackageSkillsDir,
+      path.join(__dirname, '..', 'packages', 'dom-to-pptx-skills', 'skills', 'dom-to-pptx-skill'),
+      path.join(__dirname, '..', 'skills', 'dom-to-pptx-skill'),
+      path.join(__dirname, 'skills', 'dom-to-pptx-skill'),
+    ].filter(Boolean);
+
+    const sourceDir = candidates.find((dir) => fs.existsSync(dir));
+
+    if (!sourceDir) {
+      throw new Error(`Source skills not found in candidate paths (${candidates.join(', ')}). Are you running from the package root or is dom-to-pptx-skills installed?`);
     }
 
     for (const base of targetsToInstall) {
