@@ -19,3 +19,5 @@ A huge thank you to everyone who has contributed to `dom-to-pptx`! This project 
 - [Sergey Subbotin](https://github.com/ssubbotin)
 - [Sian George](https://github.com/SGcpu)
 - [Christopher Slowe](https://github.com/KeyserSosa)
+- [Mareks Gaļanskis](https://github.com/pfmareks)
+- [wondy-dev](https://github.com/wondy-dev)

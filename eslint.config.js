@@ -17,7 +17,15 @@ export default [
     language: 'markdown/commonmark',
   },
   {
-    files: ['bin/**/*.js', 'scripts/**/*.js', 'rollup.config.js', 'vitest.config.js', 'eslint.config.js'],
+    files: [
+      'bin/**/*.js',
+      'scripts/**/*.js',
+      'packages/**/*.js',
+      'src/node-exporter.js',
+      'rollup.config.js',
+      'vitest.config.js',
+      'eslint.config.js',
+    ],
     languageOptions: { globals: { ...globals.node } },
   },
   {
@@ -30,6 +38,7 @@ export default [
     rules: {
       'no-unused-vars': 'warn',
       'no-undef': 'warn',
+      'preserve-caught-error': 'off',
     },
   },
 ];

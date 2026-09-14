@@ -21,6 +21,9 @@ import {
   getFontsFromStyleSheets,
   classifyFontVariant,
   detectVariantSlotCollisions,
+  resolveCssUrl,
+  parseImportUrlsFromCssText,
+  parseFontFacesFromCssText,
 } from '../utils.js';
 
 // -- Helpers to build CSSStyleSheet-like fixtures without a real DOM ----------
@@ -265,5 +268,77 @@ describe('detectVariantSlotCollisions', () => {
       { name: 'Inter', weight: 400, style: 'normal' },
     ];
     expect(detectVariantSlotCollisions(entries)).toEqual([]);
+  });
+});
+
+describe('resolveCssUrl', () => {
+  it('resolves relative URL against an absolute base URL', () => {
+    expect(resolveCssUrl('fonts/font.woff2', 'https://example.com/css/main.css')).toBe(
+      'https://example.com/css/fonts/font.woff2'
+    );
+  });
+
+  it('safely resolves relative URL when rawBase is itself relative (e.g., assets/deck.css in jsdom)', () => {
+    const resolved = resolveCssUrl('fonts/font.woff2', 'assets/deck.css');
+    expect(resolved).toBeTruthy();
+    expect(resolved).toContain('/assets/fonts/font.woff2');
+  });
+
+  it('returns original URL gracefully on invalid/empty inputs', () => {
+    expect(resolveCssUrl('', 'https://example.com')).toBe('');
+    expect(resolveCssUrl('font.ttf', null)).toBe('font.ttf');
+    expect(resolveCssUrl('font.ttf', undefined)).toBe('font.ttf');
+  });
+});
+
+describe('parseImportUrlsFromCssText', () => {
+  it('extracts and resolves @import with url() using double, single, and no quotes', () => {
+    const css = `
+      @import url("theme.css");
+      @import url('fonts/sub.css');
+      @import url(plain.css);
+    `;
+    const urls = parseImportUrlsFromCssText(css, 'https://example.com/assets/style.css');
+    expect(urls).toEqual([
+      'https://example.com/assets/theme.css',
+      'https://example.com/assets/fonts/sub.css',
+      'https://example.com/assets/plain.css',
+    ]);
+  });
+
+  it('extracts and resolves bare string @import statements', () => {
+    const css = `
+      @import "base.css";
+      @import 'vendor.css';
+    `;
+    const urls = parseImportUrlsFromCssText(css, 'https://example.com/style.css');
+    expect(urls).toEqual([
+      'https://example.com/base.css',
+      'https://example.com/vendor.css',
+    ]);
+  });
+
+  it('deduplicates identical import targets', () => {
+    const css = `
+      @import url("common.css");
+      @import "common.css";
+    `;
+    const urls = parseImportUrlsFromCssText(css, 'https://example.com/');
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toBe('https://example.com/common.css');
+  });
+});
+
+describe('parseFontFacesFromCssText with relative baseHref', () => {
+  it('resolves font URLs against relative baseHref without throwing TypeError', () => {
+    const css = `
+      @font-face {
+        font-family: 'RelativeFont';
+        src: url('../fonts/rel.woff2') format('woff2');
+      }
+    `;
+    const fonts = parseFontFacesFromCssText(css, new Set(['RelativeFont']), 'themes/dark/theme.css');
+    expect(fonts).toHaveLength(1);
+    expect(fonts[0].url).toContain('/themes/fonts/rel.woff2');
   });
 });

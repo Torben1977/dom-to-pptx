@@ -101,13 +101,12 @@ export function extractTableData(node, scale) {
       const padding = getPadding(style, scale);
       // getPadding returns [top, right, bottom, left] in inches relative to scale
       // PptxGenJS expects points (pt) for margin: [t, r, b, l]
-      // or discrete properties. Let's use discrete for clarity.
-      const margin = [
+      const margin = createTableCellMargin(
         padding[0] * 72 + vSpacePt / 2, // top
         padding[1] * 72 + hSpacePt / 2, // right
         padding[2] * 72 + vSpacePt / 2, // bottom
-        padding[3] * 72 + hSpacePt / 2, // left
-      ];
+        padding[3] * 72 + hSpacePt / 2  // left
+      );
 
       // E. Borders
       const borderTop = getTableBorder(style, 'Top', scale, cell);
@@ -527,6 +526,42 @@ export function getPadding(style, scale) {
   ];
 }
 
+/**
+ * Creates PPTX text shape margin/inset array in points.
+ *
+ * NOTE: Upstream PptxGenJS consumes text shape/textbox margins as
+ * [lIns, rIns, bIns, tIns] (left, right, bottom, top in points).
+ * This helper accepts standard CSS box-model order (top, right, bottom, left)
+ * and normalizes it to PptxGenJS's expected internal array order.
+ *
+ * @param {number} top - Top margin in points
+ * @param {number} right - Right margin in points
+ * @param {number} bottom - Bottom margin in points
+ * @param {number} left - Left margin in points
+ * @returns {[number, number, number, number]} Normalized margin array [left, right, bottom, top]
+ */
+export function createShapeMargin(top, right, bottom, left) {
+  return [left, right, bottom, top];
+}
+
+/**
+ * Creates PPTX table cell margin array in points.
+ *
+ * NOTE: Upstream PptxGenJS consumes table cell margins as
+ * [marT, marR, marB, marL] (top, right, bottom, left in points or inches).
+ * This helper accepts standard CSS box-model order (top, right, bottom, left)
+ * and normalizes it to PptxGenJS's expected internal array order.
+ *
+ * @param {number} top - Top margin in points
+ * @param {number} right - Right margin in points
+ * @param {number} bottom - Bottom margin in points
+ * @param {number} left - Left margin in points
+ * @returns {[number, number, number, number]} Normalized margin array [top, right, bottom, left]
+ */
+export function createTableCellMargin(top, right, bottom, left) {
+  return [top, right, bottom, left];
+}
+
 export function getSoftEdges(filterStr, scale) {
   if (!filterStr || filterStr === 'none') return null;
   const match = filterStr.match(/blur\(([\d.]+)px\)/);
@@ -667,19 +702,27 @@ export function isTextContainer(node) {
     if (!isInlineTag && !isInlineDisplay) return false;
 
     // 5. Structural Styling Check
-    // If a child has a background or border, it's a layout block, not a simple text span.
-    const bgColor = parseColor(style.backgroundColor, style);
-    const hasVisibleBg = bgColor.hex && bgColor.opacity > 0;
+    // If a child has a visible border or rounded corners, it is an independent styled shape
+    // (such as a badge, pill, or button) that cannot be represented by a flat text run
+    // because PowerPoint DrawingML text runs do not support borders or rounded corners.
+    const borderRadius =
+      parseFloat(style.borderRadius) ||
+      parseFloat(style.borderTopLeftRadius) ||
+      parseFloat(style.borderTopRightRadius) ||
+      parseFloat(style.borderBottomLeftRadius) ||
+      parseFloat(style.borderBottomRightRadius) ||
+      0;
+    const hasBorderRadius = borderRadius > 0;
     const hasBorder = parseFloat(style.borderWidth) > 0 && parseColor(style.borderColor, style).opacity > 0;
 
-    if (hasVisibleBg || hasBorder) {
-      // Relaxed check: Allow inline elements with background/border to be treated as text.
-      // They will be rendered as highlighted text runs (no border support in text runs though).
-      // This preserves text flow for "badges".
-      // return false;
+    if (hasBorder || hasBorderRadius) {
+      return false;
     }
 
-    // 4. Check for empty shapes (visual objects without text, like dots)
+    const bgColor = parseColor(style.backgroundColor, style);
+    const hasVisibleBg = bgColor.hex && bgColor.opacity > 0;
+
+    // 6. Check for empty shapes (visual objects without text, like dots)
     const hasContent = el.textContent.trim().length > 0;
     if (!hasContent && (hasVisibleBg || hasBorder)) {
       return false;
@@ -689,6 +732,18 @@ export function isTextContainer(node) {
   };
 
   return children.every(isSafeInline);
+}
+
+/**
+ * Memoized text-container classifier to avoid repeated O(N * D) style tree traversals.
+ * @param {Node} node - DOM node to test
+ * @param {WeakMap<Node, boolean> | null} cache - Export-scoped WeakMap cache
+ * @returns {boolean} Whether node is a text container
+ */
+export function isTextContainerCached(node, cache) {
+  if (!cache) return isTextContainer(node);
+  if (!cache.has(node)) cache.set(node, isTextContainer(node));
+  return cache.get(node);
 }
 
 export function getRotation(transformStr) {
@@ -1186,6 +1241,55 @@ export function extractSpeakerNotesFromElement(root) {
  * @returns {Array<{name: string, url: string, weight: string, style: string}>}
  */
 /**
+ * Resolves a potentially relative CSS URL against an owning stylesheet href
+ * while defensively anchoring relative base URLs against document.baseURI or
+ * window.location.href to prevent `TypeError: Invalid base URL` in headless / jsdom environments.
+ *
+ * @param {string} url - Target asset URL
+ * @param {string | null | undefined} rawBase - Owning stylesheet href or base path
+ * @returns {string} Fully-qualified or resolved URL string
+ */
+export function resolveCssUrl(url, rawBase) {
+  if (!url || !rawBase) return url;
+  try {
+    const docBase =
+      (typeof document !== 'undefined' && document.baseURI) ||
+      (typeof window !== 'undefined' && window.location && window.location.href) ||
+      undefined;
+    const absoluteBase = docBase ? new URL(rawBase, docBase).href : rawBase;
+    return new URL(url, absoluteBase).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Scans raw CSS text for `@import` statements and extracts resolved stylesheet URLs.
+ * Supports both `@import url(...)` and bare string `@import "..."` syntax.
+ *
+ * @param {string} cssText - Raw CSS content
+ * @param {string} [baseHref] - Stylesheet base URL for resolving relative import paths
+ * @returns {string[]} Array of unique resolved import URLs
+ */
+export function parseImportUrlsFromCssText(cssText, baseHref) {
+  if (!cssText) return [];
+  const importRegex = /@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"])/gi;
+  const urls = [];
+  let match;
+  while ((match = importRegex.exec(cssText)) !== null) {
+    const rawUrl = match[1] || match[2];
+    if (rawUrl) {
+      const trimmed = rawUrl.trim();
+      const resolved = resolveCssUrl(trimmed, baseHref);
+      if (resolved && !urls.includes(resolved)) {
+        urls.push(resolved);
+      }
+    }
+  }
+  return urls;
+}
+
+/**
  * Parses @font-face declarations from raw CSS text string.
  * Used as a fallback when document.styleSheets[i].cssRules is blocked by CORS.
  */
@@ -1221,11 +1325,7 @@ export function parseFontFacesFromCssText(cssText, usedFamilies, baseHref) {
     // Relative URLs in fetched CSS text are relative to the stylesheet href,
     // not the document; resolve them when the caller provides the base.
     if (url && baseHref) {
-      try {
-        url = new URL(url, baseHref).href;
-      } catch (e) {
-        // keep original url if it cannot be resolved
-      }
+      url = resolveCssUrl(url, baseHref);
     }
     if (url && !processedUrls.has(url)) {
       processedUrls.add(url);
@@ -1290,11 +1390,7 @@ export function getFontsFromStyleSheets(usedFamilies, styleSheets, blockedHrefs 
         if (url) {
           const base = (rule.parentStyleSheet && rule.parentStyleSheet.href) || sheet.href;
           if (base) {
-            try {
-              url = new URL(url, base).href;
-            } catch (e) {
-              // keep original url if it cannot be resolved
-            }
+            url = resolveCssUrl(url, base);
           }
         }
 
@@ -1338,29 +1434,35 @@ export async function getAutoDetectedFonts(usedFamilies) {
   }
 
   if (blockedHrefs.size > 0 && typeof fetch !== 'undefined') {
-    const fetchPromises = Array.from(blockedHrefs).map(async (href) => {
-      try {
-        const res = await fetch(href);
-        if (!res.ok) return [];
-        const cssText = await res.text();
-        return parseFontFacesFromCssText(cssText, usedFamilies, href);
-      } catch (e) {
-        console.warn('Failed to fetch cross-origin stylesheet fallback for fonts:', href, e);
-        return [];
-      }
-    });
-
-    const fetchedFontLists = await Promise.all(fetchPromises);
+    const visitedHrefs = new Set();
     const existingUrls = new Set(fontEntries.map((f) => f.url));
 
-    for (const fontList of fetchedFontLists) {
-      for (const f of fontList) {
-        if (!existingUrls.has(f.url)) {
-          existingUrls.add(f.url);
-          fontEntries.push(f);
+    const fetchSheetRecursively = async (href) => {
+      if (!href || visitedHrefs.has(href)) return;
+      visitedHrefs.add(href);
+      try {
+        const res = await fetch(href);
+        if (!res.ok) return;
+        const cssText = await res.text();
+        const fonts = parseFontFacesFromCssText(cssText, usedFamilies, href);
+        for (const f of fonts) {
+          if (!existingUrls.has(f.url)) {
+            existingUrls.add(f.url);
+            fontEntries.push(f);
+          }
         }
+
+        // Recurse into nested @import URLs if present
+        const importedUrls = parseImportUrlsFromCssText(cssText, href);
+        for (const impUrl of importedUrls) {
+          await fetchSheetRecursively(impUrl);
+        }
+      } catch (e) {
+        console.warn('Failed to fetch cross-origin stylesheet fallback for fonts:', href, e);
       }
-    }
+    };
+
+    await Promise.all(Array.from(blockedHrefs).map((href) => fetchSheetRecursively(href)));
   }
 
   return fontEntries;

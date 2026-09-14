@@ -11,7 +11,8 @@ const PptxGenJS = PptxGenJSImport?.default ?? PptxGenJSImport;
 import {
   parseColor,
   getTextStyle,
-  isTextContainer,
+  isTextContainerCached,
+  createShapeMargin,
   getVisibleShadow,
   generateGradientSVG,
   getRotation,
@@ -368,11 +369,6 @@ export async function exportToPptx(target, options = {}) {
  * @param {PptxGenJS.Slide} slide - The PPTX slide object to add content to.
  * @param {PptxGenJS} pptx - The main PPTX instance.
  */
-function isTextContainerCached(node, cache) {
-  if (!cache) return isTextContainer(node);
-  if (!cache.has(node)) cache.set(node, isTextContainer(node));
-  return cache.get(node);
-}
 
 function compareKeys(keyA, keyB) {
   const len = Math.max(keyA.length, keyB.length);
@@ -1335,13 +1331,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const ulPaddingBottom = parseFloat(style.paddingBottom) || 0;
     const ulPaddingLeft = parseFloat(style.paddingLeft) || 0;
 
-    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
-    const listMargin = [
-      ulPaddingLeft * PX_TO_INCH * config.scale * 72,
+    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points.
+    // createShapeMargin normalizes CSS (top, right, bottom, left) to this order.
+    const listMargin = createShapeMargin(
+      ulPaddingTop * PX_TO_INCH * config.scale * 72,
       ulPaddingRight * PX_TO_INCH * config.scale * 72,
       ulPaddingBottom * PX_TO_INCH * config.scale * 72,
-      ulPaddingTop * PX_TO_INCH * config.scale * 72,
-    ];
+      ulPaddingLeft * PX_TO_INCH * config.scale * 72
+    );
 
     liChildren.forEach((child, index) => {
       const liStyle = window.getComputedStyle(child);
@@ -1395,20 +1392,24 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         }
       }
 
-      // 2. Calculate Bullet Indent
-      // visualIndentPx = total horizontal offset from UL left edge to where the LI text starts.
-      // ulPaddingLeft = UL's own left padding; it's already accounted for by the text box margin.
-      // bullet.indent = gap between bullet glyph and text content, in points.
-      // This equals the distance the LI content is shifted past the UL padding boundary.
+      // 2. Calculate Bullet Indent and Hierarchical Indent Level
+      // In OpenXML DrawingML, sub-bullets use paragraph indentLevel (lvl="X"), which shifts
+      // both the bullet dot (marL) and text together.
+      // Setting bullet.indent alone only widens the gap between the bullet dot and text (hanging indent),
+      // leaving the bullet anchored at the left margin while pushing text far to the right.
       const visualIndentPx = liRect.left - parentRect.left;
-      // Bullet indent = visual indent minus the UL's own padding-left (which is in margin) plus the LI's padding-left,
-      // clamped to 0. Convert px -> pt.
       const liPaddingLeft = parseFloat(liStyle.paddingLeft) || 0;
-      const extraIndentPx = Math.max(0, visualIndentPx - ulPaddingLeft);
-      const visualIndentOffset = extraIndentPx > 5 ? extraIndentPx : 0;
+      const extraIndentPx = Math.max(0, visualIndentPx - ulPaddingLeft) + (visualIndentPx <= ulPaddingLeft ? liPaddingLeft : 0);
+
+      // A typical indentation level step in CSS is ~20px - 30px (e.g. 20px, 1.5rem, 2em).
+      // We map extra horizontal indent into indentLevel: 0 (root), 1 (sub), up to 8 (PPTX limit).
+      const indentLevel = extraIndentPx > 10
+        ? Math.min(8, Math.max(1, Math.round(extraIndentPx / 20)))
+        : 0;
 
       if (bullet) {
-        bullet.indent = 20 * config.scale + (visualIndentOffset + liPaddingLeft) * 0.75 * config.scale;
+        // Standard gap between bullet glyph and text (20pt scaled)
+        bullet.indent = 20 * config.scale;
       }
 
       // 3. Extract Text Parts
@@ -1417,6 +1418,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       if (parts.length > 0) {
         parts.forEach((p) => {
           if (!p.options) p.options = {};
+          if (indentLevel > 0) {
+            p.options.indentLevel = indentLevel;
+          }
         });
 
         // A. Apply Bullet
@@ -1430,6 +1434,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
               text: '',
               options: {
                 bullet: bullet,
+                ...(indentLevel > 0 ? { indentLevel } : {}),
               },
             });
           }
@@ -1779,14 +1784,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
 
       const padding = getPadding(style, config.scale);
-      // getPadding returns [top, right, bottom, left]; PptxGenJS consumes the margin
-      // array as [lIns, rIns, bIns, tIns], in points
-      const margin = [
-        padding[3] * 72, // left
+      // getPadding returns [top, right, bottom, left]; createShapeMargin
+      // normalizes it to PptxGenJS's [lIns, rIns, bIns, tIns] point array
+      const margin = createShapeMargin(
+        padding[0] * 72, // top
         padding[1] * 72, // right
         padding[2] * 72, // bottom
-        padding[0] * 72, // top
-      ];
+        padding[3] * 72  // left
+      );
 
       textPayload = { text: textParts, align, valign, margin };
     }
