@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2-orglith.17] - 2026-09-23
+
+### Added
+
+- Office text flow fidelity oracle: measures every word in Chromium and in the LibreOffice render of the exported PPTX, then reports per probe what a reader would see — lost words, overflow, overlap, line starts, stranded markers, vertical drift, collisions between objects, and paragraph edge spacing read from the PPTX XML. Its fixture is OrgLith adapter output, so the converter is tested at the boundary where the defects appear.
+
+### Fixed
+
+- Resolve Puppeteer's bundled browser before falling back to a system install: `executablePath()` is asynchronous in Puppeteer 25, so the exporter silently used whichever browser the machine happened to have.
+
+### Changed
+
+- Merge upstream v2.1.2: hierarchical `indentLevel` for indented sub-bullets, margin normalization helpers, recursive `@import` font detection, and badge shape preservation. Measured against the fidelity probes, none of the fork's known defects change: upstream's list fix applies only where a list item carries extra indent, while a plain list keeps the fixed 20 pt bullet gap.
+
+## [2.1.2] - 2026-09-14
+
+### Added
+
+- **Dedicated Margin Normalization Constructors**: Added `createShapeMargin(top, right, bottom, left)` and `createTableCellMargin(top, right, bottom, left)` in `src/utils.js`. Callers consistently provide standard CSS box-model `(top, right, bottom, left)` parameters; the helpers normalize to PptxGenJS's internal requirements (`[left, right, bottom, top]` for shapes and text boxes; `[top, right, bottom, left]` for table cells).
+- **Cross-Origin `@import` Stylesheet Font Detection**: Added `parseImportUrlsFromCssText` in `src/utils.js` and updated `getAutoDetectedFonts` fallback scanning to recursively discover and fetch `@import` stylesheet chains with cycle prevention, extracting `@font-face` definitions declared within nested cross-origin CSS files.
+- **Exported Text-Container Cache Memoizer**: Exported `isTextContainerCached(node, cache)` from `src/utils.js` alongside comprehensive unit tests in `src/__tests__/text-container-cache.test.js`, verifying $O(N)$ text-container classifications and cache isolation across export lifecycles.
+
+### Fixed
+
+- **Relative Font Resolution in Headless & jsdom Environments**: Resolved relative font URL failures when stylesheet paths are relative (e.g. `assets/deck.css`) by anchoring `rawBase` against `document.baseURI` or `window.location.href` via `resolveCssUrl`, preventing WHATWG `TypeError: Invalid base URL` exceptions during font embedding.
+- **Styled Badge & Pill Shape Preservation**: Fixed DOM text container classifier (`isSafeInline`) in `src/utils.js` to treat elements with visible borders or `border-radius` as independent shapes rather than swallowing them into parent text containers as flat text runs, ensuring rounded badge/pill elements retain their native PowerPoint `roundRect` geometry, borders, insets, and fill styling.
+- **Hierarchical Sub-Bullet Indentation in Lists**: Fixed sub-bullet list formatting where sub-items (e.g. `<li class="sub">` or indented nested items) had their text indented but the bullet glyph remained anchored at the left margin. Mapped visual indent offsets to native OpenXML paragraph `indentLevel` (`<a:pPr lvl="X">`) while maintaining standard bullet spacing (`bullet.indent`), shifting both bullet glyph and text content rightward in unison as expected in PowerPoint.
+
 ## [2.1.1-orglith.16] - 2026-09-09
 
 ### Fixed
@@ -168,21 +196,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-* **Incorrect CLI command in documentation**: The documented command `npx dom-to-pptx-export` does not exist. The root `package.json` only defines the following binaries:
-
-  * `dom-to-pptx`
-  * `dom-to-pptx-exporter`
-  * `dom-to-pptx-skills`
+- **Incorrect CLI command in documentation**: The documented command `npx dom-to-pptx-export` does not exist. The root `package.json` only defines the following binaries:
+  - `dom-to-pptx`
+  - `dom-to-pptx-exporter`
+  - `dom-to-pptx-skills`
 
   Updated the following files:
-
-  * `skills/dom-to-pptx-skill/SKILL.md` (lines 75, 79)
-  * `skills/dom-to-pptx-skill/reference/TEMPLATE.md` (lines 394, 397)
-  * `skills/dom-to-pptx-skill/reference/SAFE_HTML_TEMPLATE.md` (lines 219, 222)
+  - `skills/dom-to-pptx-skill/SKILL.md` (lines 75, 79)
+  - `skills/dom-to-pptx-skill/reference/TEMPLATE.md` (lines 394, 397)
+  - `skills/dom-to-pptx-skill/reference/SAFE_HTML_TEMPLATE.md` (lines 219, 222)
 
   Replaced `npx dom-to-pptx-export` with:
-
-  * `npx dom-to-pptx-exporter` (package binary)
+  - `npx dom-to-pptx-exporter` (package binary)
 
   aligning the documentation with the usage shown in `README.md`, `USAGE.md`, and `packages/dom-to-pptx-exporter/README.md`.
 
@@ -190,13 +215,13 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-* **Workspace monorepo layout**: Reorganized the repository as a `pnpm` workspace.
-* **Standalone npm packages**: Added the `dom-to-pptx-skills` and `dom-to-pptx-exporter` packages, enabling direct execution from the npm registry via:
-
-  * `npx dom-to-pptx-skills`
-  * `npx dom-to-pptx-exporter`
+- **Workspace monorepo layout**: Reorganized the repository as a `pnpm` workspace.
+- **Standalone npm packages**: Added the `dom-to-pptx-skills` and `dom-to-pptx-exporter` packages, enabling direct execution from the npm registry via:
+  - `npx dom-to-pptx-skills`
+  - `npx dom-to-pptx-exporter`
 
 ### Fixed
+
 - **Wipe Exit Preview Directions**: Resolved swapped `@keyframes` for exit directions (`wipe-out-to-left`, `wipe-out-to-right`, `wipe-out-to-up`, and `wipe-out-to-down`) in `animations.css` to accurately preview exit animations in-browser.
 - **Animation Timing Fallbacks**: Standardized default fallback animation durations in `css-parser.js` to `1000ms` (1.0s) and `animations.css` to `500ms` (0.5s) to match native PowerPoint default timings.
 

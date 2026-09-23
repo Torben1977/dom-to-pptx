@@ -275,4 +275,64 @@ describe('list text insets', () => {
     );
     expect(bulletParagraphs).toHaveLength(1);
   });
+
+  it('assigns hierarchical indentLevel to indented sub-bullets instead of bloating hanging indent', async () => {
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:500px;height:150px;color:#111;font-size:16px;line-height:25px;margin:0;padding:10px'
+    );
+
+    const liRoot = document.createElement('li');
+    liRoot.textContent = 'Root bullet';
+    const liSub = document.createElement('li');
+    liSub.className = 'sub';
+    liSub.textContent = 'Sub bullet indented';
+    // Indent sub-bullet by 24px (1 indent level)
+    liSub.setAttribute('style', 'margin-left: 24px;');
+
+    list.appendChild(liRoot);
+    list.appendChild(liSub);
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 500, height: 150 });
+    // Root li at x=210 (due to ul padding 10)
+    liRoot.getBoundingClientRect = () => rect({ left: 210, top: 210, width: 480, height: 25 });
+    // Sub li shifted right by 24px -> x=234
+    liSub.getBoundingClientRect = () => rect({ left: 234, top: 235, width: 456, height: 25 });
+
+    try {
+      const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+      const zip = await JSZip.loadAsync(blob);
+      const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+      const doc = new DOMParser().parseFromString(xml, 'text/xml');
+      const paragraphs = Array.from(doc.getElementsByTagName('a:p'));
+
+      const subP = paragraphs.find((p) =>
+        Array.from(p.getElementsByTagName('a:t')).some((t) => t.textContent.includes('Sub bullet indented'))
+      );
+      expect(subP).toBeDefined();
+
+      const pPr = subP.getElementsByTagName('a:pPr')[0];
+      expect(pPr).toBeDefined();
+
+      // lvl attribute must be 1 for sub-bullet
+      expect(pPr.getAttribute('lvl')).toBe('1');
+
+      // indent should be negative standard hanging indent (-10pt scaled = -127000 EMU)
+      // and marL should be indentLevel adjusted (marL + marL * lvl)
+      const marL = Number(pPr.getAttribute('marL'));
+      const indent = Number(pPr.getAttribute('indent'));
+      expect(indent).toBeLessThan(0);
+      expect(marL).toBeGreaterThan(0);
+    } finally {
+      slide.remove();
+    }
+  });
 });

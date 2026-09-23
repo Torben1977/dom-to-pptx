@@ -160,10 +160,10 @@ describe('extractTableData', () => {
 
     expect(foundRun).not.toBeNull();
     expect(foundRun.options.bullet).not.toBeNull();
-    // visualIndentPx should be computed from DOM getBoundingClientRect
-    // Since in JSDOM getBoundingClientRect defaults to all 0s, visualIndentPx = liRect.left - parentRect.left = 0
-    // bullet.indent = 20 * scale + (visualIndentOffset + liPaddingLeft) * 0.75 * scale = 20 + 75 = 95
-    expect(foundRun.options.bullet.indent).toBe(95);
+    // Bullet indent gap stays at standard 20pt, while hierarchical indentLevel is set for sub-bullets
+    expect(foundRun.options.bullet.indent).toBe(20);
+    // extraIndentPx = 100px -> indentLevel = min(8, round(100 / 20)) = 5
+    expect(foundRun.options.indentLevel).toBe(5);
 
     document.body.removeChild(container);
   });

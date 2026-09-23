@@ -12,6 +12,8 @@ import {
   parseColor,
   getTextStyle,
   isTextContainer,
+  isTextContainerCached,
+  createShapeMargin,
   getVisibleShadow,
   generateGradientSVG,
   getRotation,
@@ -380,11 +382,6 @@ export async function exportToPptx(target, options = {}) {
  * @param {PptxGenJS.Slide} slide - The PPTX slide object to add content to.
  * @param {PptxGenJS} pptx - The main PPTX instance.
  */
-function isTextContainerCached(node, cache) {
-  if (!cache) return isTextContainer(node);
-  if (!cache.has(node)) cache.set(node, isTextContainer(node));
-  return cache.get(node);
-}
 
 function alignmentKeyword(value) {
   const keywords = String(value || '')
@@ -522,12 +519,9 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   }
   const boundaryFindings = boundaryPolicy === 'ignore' ? [] : analyzeUnsupportedBoundaries(root);
   if (boundaryPolicy === 'error' && boundaryFindings.length > 0) {
-    throw new Error(
-      `DOM_TO_PPTX_UNSUPPORTED_BOUNDARY ${JSON.stringify(serializeBoundaryFindings(boundaryFindings))}`
-    );
+    throw new Error(`DOM_TO_PPTX_UNSUPPORTED_BOUNDARY ${JSON.stringify(serializeBoundaryFindings(boundaryFindings))}`);
   }
-  const boundaryRasterRoots =
-    boundaryPolicy === 'rasterize' ? outermostBoundaryElements(boundaryFindings) : new Set();
+  const boundaryRasterRoots = boundaryPolicy === 'rasterize' ? outermostBoundaryElements(boundaryFindings) : new Set();
 
   // Sync Traversal Function
   function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null) {
@@ -1147,11 +1141,7 @@ function analyzeMultiColumnBoundaries(root) {
   for (const container of Array.from(root.querySelectorAll('*'))) {
     const style = window.getComputedStyle(container);
     const columnCount = Number.parseInt(style.columnCount || style.webkitColumnCount || '1', 10);
-    if (
-      !Number.isFinite(columnCount) ||
-      columnCount <= 1 ||
-      isSimpleEditableMultiColumnContainer(container, style)
-    ) {
+    if (!Number.isFinite(columnCount) || columnCount <= 1 || isSimpleEditableMultiColumnContainer(container, style)) {
       continue;
     }
 
@@ -1190,7 +1180,9 @@ function serializeBoundaryFindings(findings) {
 
 function outermostBoundaryElements(findings) {
   const candidates = findings.map((finding) => finding.element);
-  return new Set(candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate))));
+  return new Set(
+    candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)))
+  );
 }
 
 function generateBorderTriangleSVG(w, h, borderLeft, borderTop, styles) {
@@ -1938,8 +1930,12 @@ function usesIntrinsicInlineSize(node, style) {
     if (isAutoSizedHorizontalFlexItem(node, style, styleMap)) return true;
 
     if (!['absolute', 'fixed'].includes(style.position)) return false;
-    const left = String(styleMap?.get('left') || '').trim().toLowerCase();
-    const right = String(styleMap?.get('right') || '').trim().toLowerCase();
+    const left = String(styleMap?.get('left') || '')
+      .trim()
+      .toLowerCase();
+    const right = String(styleMap?.get('right') || '')
+      .trim()
+      .toLowerCase();
     return left === 'auto' || right === 'auto';
   } catch {
     return false;
@@ -1953,8 +1949,7 @@ function hasIntrinsicSingleLineIntent(node, style) {
 function hasIntrinsicExplicitLineIntent(node, style, textParts) {
   if (!usesIntrinsicInlineSize(node, style)) return false;
 
-  const authoredLineCount =
-    1 + textParts.reduce((count, part) => count + (part.options?.breakLine ? 1 : 0), 0);
+  const authoredLineCount = 1 + textParts.reduce((count, part) => count + (part.options?.breakLine ? 1 : 0), 0);
   if (authoredLineCount < 2) return false;
 
   // A hard break or block child creates a PowerPoint paragraph. Disable
@@ -2259,13 +2254,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         ? liChildren.length
         : 1;
 
-    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points
-    const listMargin = [
-      ulPaddingLeft * PX_TO_INCH * config.scale * 72,
+    // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points.
+    // createShapeMargin normalizes CSS (top, right, bottom, left) to this order.
+    const listMargin = createShapeMargin(
+      ulPaddingTop * PX_TO_INCH * config.scale * 72,
       ulPaddingRight * PX_TO_INCH * config.scale * 72,
       ulPaddingBottom * PX_TO_INCH * config.scale * 72,
-      ulPaddingTop * PX_TO_INCH * config.scale * 72,
-    ];
+      ulPaddingLeft * PX_TO_INCH * config.scale * 72
+    );
 
     liChildren.forEach((child, index) => {
       const liStyle = window.getComputedStyle(child);
@@ -2323,20 +2319,23 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         }
       }
 
-      // 2. Calculate Bullet Indent
-      // visualIndentPx = total horizontal offset from UL left edge to where the LI text starts.
-      // ulPaddingLeft = UL's own left padding; it's already accounted for by the text box margin.
-      // bullet.indent = gap between bullet glyph and text content, in points.
-      // This equals the distance the LI content is shifted past the UL padding boundary.
+      // 2. Calculate Bullet Indent and Hierarchical Indent Level
+      // In OpenXML DrawingML, sub-bullets use paragraph indentLevel (lvl="X"), which shifts
+      // both the bullet dot (marL) and text together.
+      // Setting bullet.indent alone only widens the gap between the bullet dot and text (hanging indent),
+      // leaving the bullet anchored at the left margin while pushing text far to the right.
       const visualIndentPx = liRect.left - parentRect.left;
-      // Bullet indent = visual indent minus the UL's own padding-left (which is in margin) plus the LI's padding-left,
-      // clamped to 0. Convert px -> pt.
       const liPaddingLeft = parseFloat(liStyle.paddingLeft) || 0;
-      const extraIndentPx = Math.max(0, visualIndentPx - ulPaddingLeft);
-      const visualIndentOffset = extraIndentPx > 5 ? extraIndentPx : 0;
+      const extraIndentPx =
+        Math.max(0, visualIndentPx - ulPaddingLeft) + (visualIndentPx <= ulPaddingLeft ? liPaddingLeft : 0);
+
+      // A typical indentation level step in CSS is ~20px - 30px (e.g. 20px, 1.5rem, 2em).
+      // We map extra horizontal indent into indentLevel: 0 (root), 1 (sub), up to 8 (PPTX limit).
+      const indentLevel = extraIndentPx > 10 ? Math.min(8, Math.max(1, Math.round(extraIndentPx / 20))) : 0;
 
       if (bullet) {
-        bullet.indent = 20 * config.scale + (visualIndentOffset + liPaddingLeft) * 0.75 * config.scale;
+        // Standard gap between bullet glyph and text (20pt scaled)
+        bullet.indent = 20 * config.scale;
       }
 
       // 3. Extract Text Parts
@@ -2351,13 +2350,18 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       if (parts.length > 0) {
         parts.forEach((p) => {
           if (!p.options) p.options = {};
+          if (indentLevel > 0) {
+            p.options.indentLevel = indentLevel;
+          }
         });
 
         // A. Apply Bullet
         if (bullet) {
           // A bullet is a paragraph property, not a rich-text run property.
           // Applying it to every run makes PptxGenJS emit duplicate a:pPr /
-          // a:buChar nodes for one list item.
+          // a:buChar nodes for one list item. Upstream sets it on every run;
+          // keep this narrower form, and note that the empty-parts case is
+          // already handled above, before indentLevel is applied.
           parts[0].options.bullet = bullet;
         }
 
@@ -2709,9 +2713,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   // Fragmented blocks remain one parent payload until the boundary policy can
   // reject or rasterize them explicitly.
   const isText =
-    !shadowSvg &&
-    !isSimpleMultiColumnContainer &&
-    isTextContainerCached(node, globalOptions._textContainerCache);
+    !shadowSvg && !isSimpleMultiColumnContainer && isTextContainerCached(node, globalOptions._textContainerCache);
 
   if (isText) {
     const textParts = collectTextParts(
@@ -2807,14 +2809,14 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       }
 
       const padding = getPadding(style, config.scale);
-      // getPadding returns [top, right, bottom, left]; PptxGenJS consumes the margin
-      // array as [lIns, rIns, bIns, tIns], in points
-      const margin = [
-        padding[3] * 72, // left
+      // getPadding returns [top, right, bottom, left]; createShapeMargin
+      // normalizes it to PptxGenJS's [lIns, rIns, bIns, tIns] point array
+      const margin = createShapeMargin(
+        padding[0] * 72, // top
         padding[1] * 72, // right
         padding[2] * 72, // bottom
-        padding[0] * 72, // top
-      ];
+        padding[3] * 72 // left
+      );
 
       const renderedSingleLine = isRenderedSingleLine(node);
       const explicitLineIntent = hasIntrinsicExplicitLineIntent(node, style, textParts);
@@ -2844,8 +2846,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     // A resolved float region is already the complete browser line box, not a
     // natural-width glyph box. Expanding it against the parent's full content
     // area would move the text back underneath the float.
-    const tolerantRect =
-      floatFlowRect || getTolerantSingleLineRect(node, style, browserRect);
+    const tolerantRect = floatFlowRect || getTolerantSingleLineRect(node, style, browserRect);
     x = config.offX + (tolerantRect.left - config.rootX) * PX_TO_INCH * config.scale;
     y = config.offY + (tolerantRect.top - config.rootY) * PX_TO_INCH * config.scale;
     w = tolerantRect.width * PX_TO_INCH * config.scale;
