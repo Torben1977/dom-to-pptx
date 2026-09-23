@@ -104,7 +104,9 @@ const PLATFORM_BROWSERS = {
 async function ensureBrowser(puppeteer) {
   // 1. Puppeteer's bundled Chrome
   try {
-    const p = puppeteer.executablePath();
+    // Puppeteer 25 resolves the bundled browser asynchronously; awaiting a plain
+    // string from older versions is harmless.
+    const p = await puppeteer.executablePath();
     if (p && fs.existsSync(p)) {
       return { executablePath: p, product: 'chrome' };
     }
