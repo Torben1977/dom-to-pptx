@@ -27,13 +27,13 @@ const SPACING_TOLERANCE_PT = 1;
 // A converter fix removes its kind here; a regression adds one. Keep the kinds,
 // not the measured numbers: numbers vary with fonts and browser builds.
 const KNOWN_DEFECTS = {
-  // The markers now sit beside their text. What remains is the last item
-  // wrapping onto a third line in Office because its text box got the width of
-  // its content instead of the width available to it, which strands that
-  // item's marker and pushes the list past its box.
-  'marker-list': ['edge-spacing', 'overflow', 'stranded'],
-  'break-list': ['drift', 'edge-spacing', 'overflow'],
-  'native-bullets': ['edge-spacing', 'line-start'],
+  // The markers sit beside their text. What remains is the last item wrapping
+  // onto a third line in Office because its text box got the width of its
+  // content instead of the width available to it, which strands that item's
+  // marker and pushes the list past its box.
+  'marker-list': ['overflow', 'stranded'],
+  'break-list': [],
+  'native-bullets': ['line-start'],
   'hanging-indent': ['line-start'],
   'float-marker': ['overlap'],
   'inline-lead': ['overlap'],

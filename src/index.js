@@ -1545,12 +1545,6 @@ function countParagraphs(node, scale, pseudoContentByNode = null) {
   return count;
 }
 
-function collapseVerticalMargins(first, second) {
-  if (first >= 0 && second >= 0) return Math.max(first, second);
-  if (first <= 0 && second <= 0) return Math.min(first, second);
-  return first + second;
-}
-
 const TEXT_FIT_TOLERANCE_PX = 0.5;
 const TEXT_GEOMETRY_TOLERANCE_PX = 1;
 
@@ -2045,7 +2039,11 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const y =
       config.offY + (rect.top - Math.max(0, heightPx - rect.height) / 2 - config.rootY) * PX_TO_INCH * config.scale;
 
-    const textOpts = getTextStyle(style, config.scale, true, globalOptions._inheritedOpacity || 1);
+    // No margins: this fragment gets its own box at the geometry the browser
+    // measured, which already accounts for the parent's margins. Carrying them
+    // in as paragraph spacing would move the text down a second time, inside a
+    // box that is only as tall as the text.
+    const textOpts = getTextStyle(style, config.scale, false, globalOptions._inheritedOpacity || 1);
 
     // Apply __spc_ suffix if charSpacing is defined
     if (textOpts.charSpacing !== undefined) {
@@ -2385,13 +2383,18 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             ptAfter = globalOptions.listConfig.spacing.after;
           }
         } else {
-          const mt = parseFloat(liStyle.marginTop) || 0;
-          const mb = parseFloat(liStyle.marginBottom) || 0;
-          const previousStyle = index > 0 ? window.getComputedStyle(liChildren[index - 1]) : null;
-          const previousBottom = previousStyle ? parseFloat(previousStyle.marginBottom) || 0 : 0;
-          const collapsedBefore = index === 0 ? mt : collapseVerticalMargins(previousBottom, mt);
-          if (collapsedBefore > 0) ptBefore = collapsedBefore * 0.75 * config.scale;
-          if (index === liChildren.length - 1 && mb > 0) ptAfter = mb * 0.75 * config.scale;
+          // Read the gaps the browser actually laid out instead of re-deriving
+          // them from margins. It has already resolved every collapse, and a
+          // margin that collapsed out of the list sits outside the list's box:
+          // adding it back as paragraph spacing moves the text down twice and
+          // pushes the last item past the bottom edge.
+          const contentTop = parentRect.top + (parseFloat(style.borderTopWidth) || 0) + ulPaddingTop;
+          const contentBottom = parentRect.bottom - (parseFloat(style.borderBottomWidth) || 0) - ulPaddingBottom;
+          const previousBottom = index > 0 ? liChildren[index - 1].getBoundingClientRect().bottom : contentTop;
+          const spaceBefore = liRect.top - previousBottom;
+          const spaceAfter = index === liChildren.length - 1 ? contentBottom - liRect.bottom : 0;
+          if (spaceBefore > 0) ptBefore = spaceBefore * 0.75 * config.scale;
+          if (spaceAfter > 0) ptAfter = spaceAfter * 0.75 * config.scale;
         }
 
         if (ptBefore > 0) {
