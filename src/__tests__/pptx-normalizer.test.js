@@ -189,6 +189,69 @@ describe('normalizePptxZip', () => {
     expect(children[1].localName).toBe('spcAft');
   });
 
+  // PptxGenJS emits one a:pPr per text run, but only the run that opens the
+  // paragraph carries its bullet and with it marL/indent. The later runs
+  // describe no paragraph of their own and fall back to the unbulleted default
+  // marL="0" indent="0"; letting those win erased the hanging indent of every
+  // list item that contained inline markup.
+  it('keeps the paragraph properties of the run that opens the paragraph', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', buildContentTypes({ defaults: [{ ext: 'xml', contentType: 'application/xml' }] }));
+    zip.file(
+      'ppt/slides/slide1.xml',
+      `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody>
+    <a:p>
+      <a:pPr algn="l" marL="266700" indent="-266700"><a:buChar char="\u2022"/></a:pPr>
+      <a:r><a:t>Punkt mit </a:t></a:r>
+      <a:pPr algn="l" indent="0" marL="0"><a:buNone/></a:pPr>
+      <a:r><a:t>fettem</a:t></a:r>
+    </a:p>
+  </p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>`
+    );
+
+    await normalizePptxZip(zip);
+
+    const doc = new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'text/xml');
+    const pPr = doc.getElementsByTagName('a:pPr')[0];
+    expect(pPr.getAttribute('marL')).toBe('266700');
+    expect(pPr.getAttribute('indent')).toBe('-266700');
+    expect(doc.getElementsByTagName('a:buChar')).toHaveLength(1);
+    expect(doc.getElementsByTagName('a:buNone')).toHaveLength(0);
+  });
+
+  // A paragraph that only needs a hanging indent has to ask PptxGenJS for a
+  // bullet, because it writes marL/indent for bulleted paragraphs only. The
+  // sentinel glyph comes back out here.
+  it('turns the hanging-indent sentinel bullet into no bullet and keeps the indent', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', buildContentTypes({ defaults: [{ ext: 'xml', contentType: 'application/xml' }] }));
+    zip.file(
+      'ppt/slides/slide1.xml',
+      `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody>
+    <a:p>
+      <a:pPr algn="l" marL="266700" indent="-266700"><a:buSzPct val="100000"/><a:buChar char="\ufdd0"/></a:pPr>
+      <a:r><a:t>Hangender Einzug</a:t></a:r>
+    </a:p>
+  </p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>`
+    );
+
+    await normalizePptxZip(zip);
+
+    const doc = new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'text/xml');
+    const pPr = doc.getElementsByTagName('a:pPr')[0];
+    expect(pPr.getAttribute('marL')).toBe('266700');
+    expect(pPr.getAttribute('indent')).toBe('-266700');
+    expect(doc.getElementsByTagName('a:buChar')).toHaveLength(0);
+    expect(doc.getElementsByTagName('a:buSzPct')).toHaveLength(0);
+    expect(doc.getElementsByTagName('a:buNone')).toHaveLength(1);
+  });
+
   it('ensures mutual exclusivity of bullet elements by removing buNone when active bullet is present', async () => {
     const zip = new JSZip();
     zip.file(

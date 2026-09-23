@@ -15,6 +15,9 @@ import {
   isTextContainer,
   isTextContainerCached,
   createShapeMargin,
+  measureMarkerHangPx,
+  resolveHangingIndentPt,
+  applyHangingIndent,
   getVisibleShadow,
   generateGradientSVG,
   getRotation,
@@ -2260,13 +2263,61 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         ? liChildren.length
         : 1;
 
+    // Where each item's text starts, measured, relative to the list's own box.
+    // One left inset serves the whole shape, so it can only be settled once
+    // every item is known.
+    const listRect = node.getBoundingClientRect();
+    const itemTextLeftPx = liChildren.map((li) => {
+      const itemStyle = window.getComputedStyle(li);
+      return (
+        li.getBoundingClientRect().left +
+        (parseFloat(itemStyle.borderLeftWidth) || 0) +
+        (parseFloat(itemStyle.paddingLeft) || 0) -
+        listRect.left
+      );
+    });
+
+    // The browser paints an `outside` marker in the list's left padding and
+    // starts the text at the content edge. PowerPoint cannot separate the two:
+    // a bulleted paragraph has a single hanging indent, and PptxGenJS derives
+    // the text margin from it (marL = indent x (1 + level), glyph at
+    // marL - indent). So the marker distance has to come *out of* the shape's
+    // left inset -- which is what the list padding is there for -- instead of
+    // being added on top of it. Added on top, every item's text ended up one
+    // marker width too far right.
+    //
+    // An item without a marker cannot carry that indent: PptxGenJS pins such a
+    // paragraph to marL=0. A list that mixes marked and unmarked items would
+    // therefore tear apart, so the measured path only runs when every item has
+    // a marker; otherwise the previous behaviour stands.
+    const everyItemIsMarked =
+      liChildren.length > 0 &&
+      liChildren.every((li) => String(window.getComputedStyle(li).listStyleType || 'disc') !== 'none');
+    // Ordered markers are right-aligned against the content edge, so the widest
+    // ordinal decides how much room the list has to reserve.
+    const lastOrderedValue = nextOrderedValue + orderedDirection * (liChildren.length - 1);
+    const widestOrdinal = Math.abs(lastOrderedValue) > Math.abs(nextOrderedValue) ? lastOrderedValue : nextOrderedValue;
+    const markerHangPx = everyItemIsMarked
+      ? measureMarkerHangPx(
+          nodeTag,
+          window.getComputedStyle(liChildren[0]),
+          window.getComputedStyle(liChildren[0], '::marker'),
+          widestOrdinal
+        )
+      : 0;
+    const textBaseLeftPx = itemTextLeftPx.length ? Math.min(...itemTextLeftPx) : ulPaddingLeft;
+    // The marker cannot hang further left than the box: the browser lets it
+    // spill out of a list with no padding, PowerPoint clips it at the inset.
+    const hangPx = markerHangPx > 0 ? Math.min(markerHangPx, Math.max(0, textBaseLeftPx)) : 0;
+    const listInsetLeftPx = hangPx > 0 ? textBaseLeftPx - hangPx : ulPaddingLeft;
+
     // PptxGenJS consumes the margin array as [lIns, rIns, bIns, tIns], in points.
     // createShapeMargin normalizes CSS (top, right, bottom, left) to this order.
     const listMargin = createShapeMargin(
       ulPaddingTop * PX_TO_INCH * config.scale * 72,
       ulPaddingRight * PX_TO_INCH * config.scale * 72,
       ulPaddingBottom * PX_TO_INCH * config.scale * 72,
-      ulPaddingLeft * PX_TO_INCH * config.scale * 72
+      listInsetLeftPx * PX_TO_INCH * config.scale * 72
     );
 
     liChildren.forEach((child, index) => {
@@ -2330,18 +2381,25 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       // both the bullet dot (marL) and text together.
       // Setting bullet.indent alone only widens the gap between the bullet dot and text (hanging indent),
       // leaving the bullet anchored at the left margin while pushing text far to the right.
-      const visualIndentPx = liRect.left - parentRect.left;
-      const liPaddingLeft = parseFloat(liStyle.paddingLeft) || 0;
-      const extraIndentPx =
-        Math.max(0, visualIndentPx - ulPaddingLeft) + (visualIndentPx <= ulPaddingLeft ? liPaddingLeft : 0);
+      let indentLevel = 0;
+      if (hangPx > 0) {
+        // marL = indent x (1 + level): the level is how many marker widths this
+        // item sits right of the leftmost one. Rounding is what OpenXML allows
+        // here -- it has no free per-paragraph margin next to a bullet.
+        indentLevel = Math.min(8, Math.max(0, Math.round((itemTextLeftPx[index] - listInsetLeftPx) / hangPx) - 1));
+      } else {
+        const visualIndentPx = liRect.left - parentRect.left;
+        const liPaddingLeft = parseFloat(liStyle.paddingLeft) || 0;
+        const extraIndentPx =
+          Math.max(0, visualIndentPx - ulPaddingLeft) + (visualIndentPx <= ulPaddingLeft ? liPaddingLeft : 0);
 
-      // A typical indentation level step in CSS is ~20px - 30px (e.g. 20px, 1.5rem, 2em).
-      // We map extra horizontal indent into indentLevel: 0 (root), 1 (sub), up to 8 (PPTX limit).
-      const indentLevel = extraIndentPx > 10 ? Math.min(8, Math.max(1, Math.round(extraIndentPx / 20))) : 0;
+        // A typical indentation level step in CSS is ~20px - 30px (e.g. 20px, 1.5rem, 2em).
+        // We map extra horizontal indent into indentLevel: 0 (root), 1 (sub), up to 8 (PPTX limit).
+        indentLevel = extraIndentPx > 10 ? Math.min(8, Math.max(1, Math.round(extraIndentPx / 20))) : 0;
+      }
 
       if (bullet) {
-        // Standard gap between bullet glyph and text (20pt scaled)
-        bullet.indent = 20 * config.scale;
+        bullet.indent = hangPx > 0 ? hangPx * PX_TO_INCH * config.scale * 72 : 20 * config.scale;
       }
 
       // 3. Extract Text Parts
@@ -2819,6 +2877,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         });
       }
 
+      // A hanging first line is the same shape as a list marker: the line
+      // starts left of the ones below it, and the room it needs comes out of
+      // the box's left inset rather than being added on top of it.
+      const hangPt = resolveHangingIndentPt(node, style, config.scale);
+      if (hangPt > 0) applyHangingIndent(textParts, hangPt);
+
       const padding = getPadding(style, config.scale);
       // getPadding returns [top, right, bottom, left]; createShapeMargin
       // normalizes it to PptxGenJS's [lIns, rIns, bIns, tIns] point array
@@ -2826,7 +2890,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         padding[0] * 72, // top
         padding[1] * 72, // right
         padding[2] * 72, // bottom
-        padding[3] * 72 // left
+        padding[3] * 72 - hangPt // left
       );
 
       const renderedSingleLine = isRenderedSingleLine(node);

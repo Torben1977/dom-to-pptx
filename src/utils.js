@@ -820,6 +820,169 @@ export function createShapeMargin(top, right, bottom, left) {
   return [left, right, bottom, top];
 }
 
+// A list marker lives outside the text it belongs to. The browser paints it in
+// the list's left padding; PowerPoint has no such box and instead hangs the
+// first line of a bulleted paragraph left of the rest by one fixed distance.
+// That distance is not in the CSS — it follows from the marker glyph, the font
+// and the list type — so the only honest source is the browser itself.
+const markerHangCache = new Map();
+
+/**
+ * Measures how far a list marker sits left of its item text, in CSS pixels.
+ *
+ * Laid out with `list-style-position: inside` the marker joins the line box, so
+ * the text starts exactly one marker width further right than with `outside`.
+ * The difference between the two is the distance we need. Both are laid out in
+ * a hidden probe rather than on the live element, because switching the real
+ * item would invalidate the rectangles the export is measuring.
+ *
+ * @returns {number} The distance in CSS pixels, or 0 when it cannot be
+ *   measured — no layout engine, no marker, or a degenerate result. Callers
+ *   treat 0 as "keep whatever you did before".
+ */
+export function measureMarkerHangPx(listTag, itemStyle, markerStyle, startAt = 1) {
+  const listStyleType = String(itemStyle?.listStyleType || 'disc');
+  if (listStyleType === 'none') return 0;
+  if (typeof document === 'undefined' || !document.body) return 0;
+
+  const font = {
+    family: itemStyle.fontFamily || 'inherit',
+    size: itemStyle.fontSize || 'inherit',
+    weight: itemStyle.fontWeight || 'inherit',
+    style: itemStyle.fontStyle || 'inherit',
+  };
+  const markerSize = markerStyle?.fontSize || font.size;
+  const markerFamily = markerStyle?.fontFamily || font.family;
+  const key = [
+    listTag,
+    listStyleType,
+    font.family,
+    font.size,
+    font.weight,
+    font.style,
+    markerSize,
+    markerFamily,
+    startAt,
+  ].join('|');
+  const cached = markerHangCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const host = document.createElement('div');
+  host.setAttribute('data-pptx-marker-probe', '');
+  host.style.cssText = 'position:absolute;top:0;left:-10000px;visibility:hidden;margin:0;padding:0;';
+  const sheet = document.createElement('style');
+  // ::marker cannot be addressed inline, and its font may differ from the item's.
+  sheet.textContent = `[data-pptx-marker-probe] li::marker{font-size:${markerSize};font-family:${markerFamily};}`;
+  host.appendChild(sheet);
+
+  const build = (position) => {
+    const list = document.createElement(listTag === 'ol' ? 'ol' : 'ul');
+    list.style.cssText =
+      `margin:0;padding:0;list-style-type:${listStyleType};list-style-position:${position};` +
+      `font-family:${font.family};font-size:${font.size};font-weight:${font.weight};font-style:${font.style};`;
+    if (listTag === 'ol') list.setAttribute('start', String(startAt));
+    const item = document.createElement('li');
+    const text = document.createElement('span');
+    text.textContent = 'x';
+    item.appendChild(text);
+    list.appendChild(item);
+    host.appendChild(list);
+    return { list, text };
+  };
+
+  let hang = 0;
+  const outside = build('outside');
+  const inside = build('inside');
+  try {
+    document.body.appendChild(host);
+    const textStart = ({ list, text }) => text.getBoundingClientRect().left - list.getBoundingClientRect().left;
+    hang = textStart(inside) - textStart(outside);
+  } catch {
+    // No layout engine, no measurement -- the caller keeps what it did before.
+  } finally {
+    host.remove();
+  }
+
+  if (!Number.isFinite(hang) || hang <= 0) hang = 0;
+  markerHangCache.set(key, hang);
+  return hang;
+}
+
+const CSS_PX_VALUE = /^(-?\d+(?:\.\d+)?)px$/;
+
+/**
+ * The amount a block pulls its first line left of the following ones, in CSS
+ * pixels. Only a negative `text-indent` does that; a positive one indents the
+ * first line to the right, which OpenXML cannot express through PptxGenJS
+ * (it always writes a negative indent), and percentages and the `each-line` /
+ * `hanging` keywords are left out because they do not resolve to a single
+ * length here.
+ */
+function hangingIndentPx(style) {
+  const match = CSS_PX_VALUE.exec(String(style?.textIndent || '').trim());
+  if (!match) return 0;
+  const value = parseFloat(match[1]);
+  return value < 0 ? -value : 0;
+}
+
+/**
+ * Resolves a block's hanging first line into a PPTX indent, in points.
+ *
+ * `text-indent` is inherited but takes effect per block box, while a PowerPoint
+ * text shape has one left inset for all of its paragraphs. So the hang is only
+ * usable when every block inside the shape agrees with the shape's own value.
+ *
+ * @returns {number} The hang in points, or 0 when the shape must be left alone.
+ */
+export function resolveHangingIndentPt(node, style, scale) {
+  const hangPx = hangingIndentPx(style);
+  if (hangPx <= 0) return 0;
+
+  for (const el of node?.querySelectorAll?.('*') || []) {
+    const childStyle = window.getComputedStyle(el);
+    if (!isBlockFlowDisplay(childStyle.display)) continue;
+    if (hangingIndentPx(childStyle) !== hangPx) return 0;
+  }
+
+  // The browser lets a first line spill out of the box to the left. PowerPoint
+  // has nothing left of its inset, so the hang stops at the padding.
+  const paddingLeftPx = parseFloat(style.paddingLeft) || 0;
+  return Math.min(hangPx, paddingLeftPx) * 0.75 * scale;
+}
+
+/**
+ * The bullet PptxGenJS is asked for when a paragraph needs a hanging indent but
+ * no marker. U+FDD0 is a permanent Unicode noncharacter, so it can never be a
+ * bullet anyone meant, and unlike U+FFFF it is a legal XML character -- with
+ * U+FFFF the slide no longer parsed and the normalizer skipped it silently.
+ * `normalizePptxZip` turns it into `<a:buNone/>` and keeps the indent. Nothing
+ * else may use this code.
+ */
+export const HANGING_INDENT_BULLET_CODE = 'FDD0';
+
+/**
+ * Gives every paragraph in `textParts` a hanging indent of `hangPt` points.
+ *
+ * OpenXML states a hanging first line as the pair marL/indent, and PptxGenJS
+ * writes that pair only for a paragraph that carries a bullet. A bullet is not
+ * what we want, and an invisible one does not help: the glyph itself occupies
+ * the hanging position and the text still starts at marL -- measured against
+ * LibreOffice with a space and with a zero-width character. So the paragraph
+ * asks for the sentinel bullet and the normalizer removes it afterwards,
+ * leaving marL/indent with `<a:buNone/>`, which is what a hanging indent
+ * without a marker looks like in OpenXML.
+ */
+export function applyHangingIndent(textParts, hangPt) {
+  let startsParagraph = true;
+  for (const part of textParts || []) {
+    if (!part.options) part.options = {};
+    if (startsParagraph && !part.options.bullet) {
+      part.options.bullet = { characterCode: HANGING_INDENT_BULLET_CODE, indent: hangPt };
+    }
+    startsParagraph = Boolean(part.options.breakLine);
+  }
+}
+
 /**
  * Creates PPTX table cell margin array in points.
  *
@@ -2055,7 +2218,7 @@ export function getNodeHyperlink(node) {
   };
 }
 
-function isBlockFlowDisplay(display) {
+export function isBlockFlowDisplay(display) {
   const normalized = String(display || '').toLowerCase();
   return (
     ['block', 'list-item', 'flow-root', 'flex', 'grid', 'table'].includes(normalized) || normalized.startsWith('table-')

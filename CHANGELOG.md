@@ -6,11 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `measureMarkerHangPx` in `src/utils.js`: measures how far a list marker sits left of its item text by laying the same item out with `list-style-position: inside` in a hidden probe, because that distance follows from the glyph, the font and the list type rather than from the declared CSS. Returns 0 where nothing can be measured, which callers read as "keep the previous behaviour".
 - Office text flow fidelity oracle: measures every word in Chromium and in the LibreOffice render of the exported PPTX, then reports per probe what a reader would see — lost words, overflow, overlap, line starts, stranded markers, vertical drift, collisions between objects, and paragraph edge spacing read from the PPTX XML. Its fixture is OrgLith adapter output, so the converter is tested at the boundary where the defects appear.
 
 ### Fixed
 
 - Resolve Puppeteer's bundled browser before falling back to a system install: `executablePath()` is asynchronous in Puppeteer 25, so the exporter silently used whichever browser the machine happened to have.
+- List markers no longer push their item text aside. The browser paints an `outside` marker in the list's left padding and starts the text at the content edge; PowerPoint ties glyph and text to one hanging indent, and the converter added a fixed 20 pt gap on top of the padding — so every item's text sat one marker width too far right (20 pt on a 20 px list). The distance is now measured in the browser and comes out of the shape's left inset.
+- A list item containing inline markup lost its hanging indent completely. PptxGenJS emits one `a:pPr` per text run and every run after the first falls back to `marL="0" indent="0"`; the normalizer merged those over the properties of the run that carries the bullet. It now keeps the properties of the run that opens the paragraph.
+- `text-indent` with a negative value is exported instead of dropped. A hanging first line is the same shape as a marker, so it travels as `marL`/`indent` with no marker: the inset marks the first line, the indent carries the following ones back. PptxGenJS writes that pair only for a bulleted paragraph, and an invisible glyph does not help — the glyph occupies the hanging position and the text still starts at `marL`. The paragraph therefore asks for a sentinel bullet, U+FDD0, and `normalizePptxZip` turns it into `<a:buNone/>` and keeps the indent.
 
 ### Changed
 

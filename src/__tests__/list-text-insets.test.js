@@ -38,6 +38,26 @@ beforeAll(() => {
   });
 });
 
+// The marker width is measured in a hidden probe, which jsdom lays out as
+// nothing. Answer for the probe only, so the arithmetic around the measurement
+// can be tested without a browser.
+async function withMeasuredMarkerHang(hangPx, run) {
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function () {
+    if (this.closest?.('[data-pptx-marker-probe]')) {
+      const list = this.tagName === 'UL' || this.tagName === 'OL' ? this : this.closest('ul, ol');
+      const marksInside = list?.style?.listStylePosition === 'inside';
+      return rect({ left: this === list ? 0 : marksInside ? hangPx : 0, top: 0, width: 8, height: 8 });
+    }
+    return original.call(this);
+  };
+  try {
+    return await run();
+  } finally {
+    Element.prototype.getBoundingClientRect = original;
+  }
+}
+
 let emptyListDocumentPromise;
 
 function emptyListDocument() {
@@ -331,6 +351,108 @@ describe('list text insets', () => {
       const indent = Number(pPr.getAttribute('indent'));
       expect(indent).toBeLessThan(0);
       expect(marL).toBeGreaterThan(0);
+    } finally {
+      slide.remove();
+    }
+  });
+
+  // The browser paints an outside marker in the list's left padding and starts
+  // the text at the content edge. PowerPoint ties glyph and text to one number,
+  // so the room for the marker has to come out of the inset -- added on top of
+  // it, every item's text sat one marker width too far right.
+  it('takes the measured marker width out of the list inset instead of adding it to the text', async () => {
+    const paddingLeftPx = 24;
+    const hangPx = 20;
+
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:400px;height:60px;color:#111;font-size:21px;' +
+        `line-height:30px;margin:0;padding:0 0 0 ${paddingLeftPx}px`
+    );
+    const item = document.createElement('li');
+    item.setAttribute('style', 'font-size:21px;line-height:30px');
+    item.textContent = 'Measured item';
+    list.appendChild(item);
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 400, height: 60 });
+    item.getBoundingClientRect = () => rect({ left: 200 + paddingLeftPx, top: 200, width: 376, height: 30 });
+
+    try {
+      const doc = await withMeasuredMarkerHang(hangPx, async () => {
+        const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+        const zip = await JSZip.loadAsync(blob);
+        return new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'text/xml');
+      });
+      const listShape = Array.from(doc.getElementsByTagName('p:sp')).find((shape) =>
+        Array.from(shape.getElementsByTagName('a:t')).some((run) => run.textContent === 'Measured item')
+      );
+      expect(listShape).toBeDefined();
+
+      const emu = (px) => Math.round(px * PT_PER_PX * EMU_PER_PT);
+      const lIns = Number(listShape.getElementsByTagName('a:bodyPr')[0].getAttribute('lIns'));
+      const pPr = listShape.getElementsByTagName('a:pPr')[0];
+      const marL = Number(pPr.getAttribute('marL'));
+      const indent = Number(pPr.getAttribute('indent'));
+
+      // The text sits at the content edge, the glyph one marker width left of it.
+      expect(lIns + marL).toBe(emu(paddingLeftPx));
+      expect(lIns + marL + indent).toBe(emu(paddingLeftPx - hangPx));
+      expect(pPr.getAttribute('lvl')).toBeNull();
+    } finally {
+      slide.remove();
+    }
+  });
+
+  // An item without a marker cannot carry a hanging indent: PptxGenJS pins such
+  // a paragraph to marL=0. A list that mixes the two would tear apart, so the
+  // inset stays where it was.
+  it('leaves the list inset alone when an item has no marker', async () => {
+    const paddingLeftPx = 24;
+
+    const slide = document.createElement('div');
+    slide.setAttribute('style', 'position:relative;width:1920px;height:1080px;background:#fff');
+    const list = document.createElement('ul');
+    list.setAttribute(
+      'style',
+      'position:absolute;left:200px;top:200px;width:400px;height:60px;color:#111;font-size:22px;' +
+        `line-height:30px;margin:0;padding:0 0 0 ${paddingLeftPx}px`
+    );
+    const marked = document.createElement('li');
+    marked.setAttribute('style', 'font-size:22px;line-height:30px');
+    marked.textContent = 'Marked item';
+    const bare = document.createElement('li');
+    bare.setAttribute('style', 'font-size:22px;line-height:30px;list-style-type:none');
+    bare.textContent = 'Bare item';
+    list.append(marked, bare);
+    slide.appendChild(list);
+    document.body.appendChild(slide);
+
+    slide.getBoundingClientRect = () => rect({ left: 0, top: 0, width: 1920, height: 1080 });
+    list.getBoundingClientRect = () => rect({ left: 200, top: 200, width: 400, height: 60 });
+    Array.from(list.children).forEach((child, index) => {
+      child.getBoundingClientRect = () =>
+        rect({ left: 200 + paddingLeftPx, top: 200 + index * 30, width: 376, height: 30 });
+    });
+
+    try {
+      const doc = await withMeasuredMarkerHang(20, async () => {
+        const blob = await exportToPptx(slide, { skipDownload: true, autoEmbedFonts: false });
+        const zip = await JSZip.loadAsync(blob);
+        return new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'text/xml');
+      });
+      const listShape = Array.from(doc.getElementsByTagName('p:sp')).find((shape) =>
+        Array.from(shape.getElementsByTagName('a:t')).some((run) => run.textContent === 'Marked item')
+      );
+      expect(listShape).toBeDefined();
+      expect(Number(listShape.getElementsByTagName('a:bodyPr')[0].getAttribute('lIns'))).toBe(
+        Math.round(paddingLeftPx * PT_PER_PX * EMU_PER_PT)
+      );
     } finally {
       slide.remove();
     }

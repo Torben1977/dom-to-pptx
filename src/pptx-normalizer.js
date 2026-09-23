@@ -1,6 +1,7 @@
 // src/pptx-normalizer.js
 import { buildTimingXml } from './animations/xml-templates.js';
 import { getTransitionXml } from './animations/transitions.js';
+import { HANGING_INDENT_BULLET_CODE } from './utils.js';
 //
 // Defensive OOXML normalizer that runs over the PPTX produced by PptxGenJS
 // before we hand the .pptx blob to the user. Microsoft PowerPoint refuses to
@@ -168,9 +169,14 @@ function cleanParagraphProperties(doc) {
       if (pPrs.length > 1) {
         for (let i = 1; i < pPrs.length; i++) {
           const sourcePPr = pPrs[i];
-          // merge attributes
+          // Merge attributes, first one wins. PptxGenJS emits one pPr per text
+          // run, but only the run that opens the paragraph carries its bullet,
+          // and with it marL/indent; the later runs describe no paragraph of
+          // their own and fall back to the unbulleted default marL="0"
+          // indent="0". Letting those win erased the hanging indent of every
+          // list item that contained so much as a <strong>.
           for (const attr of Array.from(sourcePPr.attributes)) {
-            if (targetPPr.getAttribute(attr.name) !== attr.value) {
+            if (!targetPPr.hasAttribute(attr.name)) {
               targetPPr.setAttribute(attr.name, attr.value);
             }
           }
@@ -195,6 +201,28 @@ function cleanParagraphProperties(doc) {
         } else {
           seen.set(key, child);
         }
+      }
+
+      // A paragraph that only wanted a hanging indent asked for the sentinel
+      // bullet, because PptxGenJS writes marL/indent for bulleted paragraphs
+      // only. Take the glyph back out: the indent stays, the marker goes.
+      const sentinel = Array.from(targetPPr.childNodes).find(
+        (node) =>
+          node.nodeType === 1 &&
+          node.localName === 'buChar' &&
+          node.getAttribute('char') === String.fromCodePoint(Number.parseInt(HANGING_INDENT_BULLET_CODE, 16))
+      );
+      if (sentinel) {
+        targetPPr.removeChild(sentinel);
+        for (const size of Array.from(targetPPr.childNodes).filter(
+          (node) => node.nodeType === 1 && node.localName === 'buSzPct'
+        )) {
+          targetPPr.removeChild(size);
+        }
+        if (!Array.from(targetPPr.childNodes).some((node) => node.nodeType === 1 && node.localName === 'buNone')) {
+          targetPPr.appendChild(doc.createElementNS(targetPPr.namespaceURI, 'a:buNone'));
+        }
+        mutated = true;
       }
 
       // Ensure mutual exclusivity of bullet elements (buNone, buChar, buAutoNum, buBlip)

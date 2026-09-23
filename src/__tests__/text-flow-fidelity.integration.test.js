@@ -33,8 +33,11 @@ const KNOWN_DEFECTS = {
   // marker and pushes the list past its box.
   'marker-list': ['overflow', 'stranded'],
   'break-list': [],
-  'native-bullets': ['line-start'],
-  'hanging-indent': ['line-start'],
+  // The marker width comes out of the list's left inset, as it does out of the
+  // left padding in the browser, so the text starts at the content edge.
+  'native-bullets': [],
+  // A negative text-indent travels as marL/indent with no marker. Faithful today.
+  'hanging-indent': [],
   'float-marker': ['overlap'],
   'inline-lead': ['overlap'],
   'stacked-divs': [],
