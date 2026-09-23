@@ -11,6 +11,7 @@ const PptxGenJS = PptxGenJSImport?.default ?? PptxGenJSImport;
 import {
   parseColor,
   getTextStyle,
+  isOutOfTextFlow,
   isTextContainer,
   isTextContainerCached,
   createShapeMargin,
@@ -1909,8 +1910,15 @@ function getTolerantSingleLineRect(node, style, rect) {
   const anchorBottom = Number.isFinite(bottomInset) && (!Number.isFinite(topInset) || bottomInset < topInset);
   let left = anchorRight ? rect.left - horizontalDelta : rect.left;
   let top = anchorBottom ? rect.top - verticalDelta : rect.top;
-  left = Math.max(contentLeft, Math.min(left, contentRight - width));
-  top = Math.max(contentTop, Math.min(top, contentBottom - height));
+  // An out-of-flow box is laid out against its containing block, not against
+  // the parent's content box — a marker anchored in the parent's left padding
+  // sits exactly where the author put it. Clamping it inward would move it by
+  // the padding, which is how `li::before` markers ended up on top of their
+  // own text.
+  if (!isOutOfTextFlow(style)) {
+    left = Math.max(contentLeft, Math.min(left, contentRight - width));
+    top = Math.max(contentTop, Math.min(top, contentBottom - height));
+  }
 
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
@@ -3261,6 +3269,11 @@ function isComplexHierarchy(root) {
     // 2. Media / Icons
     if (['img', 'svg', 'canvas', 'video', 'iframe'].includes(elTag)) return true;
     if (isIconElement(el)) return true;
+
+    // 2b. Out-of-flow descendants (a marker placed beside its text with
+    // `position: absolute`, a floated lead-in). Flattening the list would turn
+    // them into paragraphs of their own, pushing the text out of its box.
+    if (el !== root && isOutOfTextFlow(window.getComputedStyle(el))) return true;
 
     // 3. Nested Lists (Flattening logic doesn't support nested bullets well yet)
     if (el !== root && (elTag === 'ul' || elTag === 'ol')) return true;

@@ -225,7 +225,7 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
         padding[0] * 72 + vSpacePt / 2, // top
         padding[1] * 72 + hSpacePt / 2, // right
         padding[2] * 72 + vSpacePt / 2, // bottom
-        padding[3] * 72 + hSpacePt / 2  // left
+        padding[3] * 72 + hSpacePt / 2 // left
       );
 
       // E. Borders
@@ -424,7 +424,10 @@ function resolveRadiusComponent(token, axisLength) {
  */
 export function resolveCssCornerRadii(style, w, h) {
   const resolveCorner = (value) => {
-    const tokens = String(value || '0').trim().split(/\s+/).filter(Boolean);
+    const tokens = String(value || '0')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
     const xToken = tokens[0] || '0';
     const yToken = tokens[1] || xToken;
     return {
@@ -501,21 +504,27 @@ export function generateCompositeBorderSVG(w, h, radii, sides) {
     let path;
 
     if (sideName === 'top') {
-      path = `M ${half} ${radii.tl.y} ${arcOrLine(tl.x, tl.y, 1, radii.tl.x, half)} ` +
+      path =
+        `M ${half} ${radii.tl.y} ${arcOrLine(tl.x, tl.y, 1, radii.tl.x, half)} ` +
         `L ${w - radii.tr.x} ${half} ${arcOrLine(tr.x, tr.y, 1, w - half, radii.tr.y)}`;
     } else if (sideName === 'right') {
-      path = `M ${w - radii.tr.x} ${half} ${arcOrLine(tr.x, tr.y, 1, w - half, radii.tr.y)} ` +
+      path =
+        `M ${w - radii.tr.x} ${half} ${arcOrLine(tr.x, tr.y, 1, w - half, radii.tr.y)} ` +
         `L ${w - half} ${h - radii.br.y} ${arcOrLine(br.x, br.y, 1, w - radii.br.x, h - half)}`;
     } else if (sideName === 'bottom') {
-      path = `M ${w - half} ${h - radii.br.y} ${arcOrLine(br.x, br.y, 1, w - radii.br.x, h - half)} ` +
+      path =
+        `M ${w - half} ${h - radii.br.y} ${arcOrLine(br.x, br.y, 1, w - radii.br.x, h - half)} ` +
         `L ${radii.bl.x} ${h - half} ${arcOrLine(bl.x, bl.y, 1, half, h - radii.bl.y)}`;
     } else {
-      path = `M ${radii.tl.x} ${half} ${arcOrLine(tl.x, tl.y, 0, half, radii.tl.y)} ` +
+      path =
+        `M ${radii.tl.x} ${half} ${arcOrLine(tl.x, tl.y, 0, half, radii.tl.y)} ` +
         `L ${half} ${h - radii.bl.y} ${arcOrLine(bl.x, bl.y, 0, radii.bl.x, h - half)}`;
     }
 
-    return `<path d="${path}" fill="none" stroke="#${side.color}" ` +
-      `stroke-opacity="${side.opacity ?? 1}" stroke-width="${side.width}" ${dashAttributes(side)} />`;
+    return (
+      `<path d="${path}" fill="none" stroke="#${side.color}" ` +
+      `stroke-opacity="${side.opacity ?? 1}" stroke-width="${side.width}" ${dashAttributes(side)} />`
+    );
   };
 
   const addSide = (sideName, side, squareItem) => {
@@ -526,30 +535,30 @@ export function generateCompositeBorderSVG(w, h, radii, sides) {
   addSide(
     'top',
     sides.top,
-      sides.top.style === 'dashed' || sides.top.style === 'dotted'
-        ? line(sides.top, 0, sides.top.width / 2, w, sides.top.width / 2)
-        : `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`
+    sides.top.style === 'dashed' || sides.top.style === 'dotted'
+      ? line(sides.top, 0, sides.top.width / 2, w, sides.top.width / 2)
+      : `<rect x="0" y="0" width="${w}" height="${sides.top.width}" fill="#${sides.top.color}" fill-opacity="${sides.top.opacity ?? 1}" />`
   );
   addSide(
     'right',
     sides.right,
-      sides.right.style === 'dashed' || sides.right.style === 'dotted'
-        ? line(sides.right, w - sides.right.width / 2, 0, w - sides.right.width / 2, h)
-        : `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`
+    sides.right.style === 'dashed' || sides.right.style === 'dotted'
+      ? line(sides.right, w - sides.right.width / 2, 0, w - sides.right.width / 2, h)
+      : `<rect x="${w - sides.right.width}" y="0" width="${sides.right.width}" height="${h}" fill="#${sides.right.color}" fill-opacity="${sides.right.opacity ?? 1}" />`
   );
   addSide(
     'bottom',
     sides.bottom,
-      sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
-        ? line(sides.bottom, 0, h - sides.bottom.width / 2, w, h - sides.bottom.width / 2)
-        : `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`
+    sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
+      ? line(sides.bottom, 0, h - sides.bottom.width / 2, w, h - sides.bottom.width / 2)
+      : `<rect x="0" y="${h - sides.bottom.width}" width="${w}" height="${sides.bottom.width}" fill="#${sides.bottom.color}" fill-opacity="${sides.bottom.opacity ?? 1}" />`
   );
   addSide(
     'left',
     sides.left,
-      sides.left.style === 'dashed' || sides.left.style === 'dotted'
-        ? line(sides.left, sides.left.width / 2, 0, sides.left.width / 2, h)
-        : `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`
+    sides.left.style === 'dashed' || sides.left.style === 'dotted'
+      ? line(sides.left, sides.left.width / 2, 0, sides.left.width / 2, h)
+      : `<rect x="0" y="0" width="${sides.left.width}" height="${h}" fill="#${sides.left.color}" fill-opacity="${sides.left.opacity ?? 1}" />`
   );
 
   const svg = `
@@ -1016,6 +1025,11 @@ export function isTextContainer(node) {
       return false;
     }
 
+    // An out-of-flow child is painted at its own geometry, not where the text
+    // run reaches. Its characters may look like part of the sentence, but the
+    // browser never laid them out that way.
+    if (isOutOfTextFlow(style)) return false;
+
     // Inline formatting only guarantees shared text flow for true inline
     // boxes. Atomic inline boxes keep their own width/alignment/layout and
     // cannot be represented faithfully as a PowerPoint rich-text run.
@@ -1024,8 +1038,7 @@ export function isTextContainer(node) {
 
     // Grid containers need their own render item even as `inline-grid`; folding them into the
     // parent's text run would discard their internal layout and item alignment.
-    const isBlockDisplay =
-      display === 'block' || display === 'flex' || display.includes('grid') || display === 'table';
+    const isBlockDisplay = display === 'block' || display === 'flex' || display.includes('grid') || display === 'table';
     if (isBlockDisplay) return false;
 
     const parentStyle = el.parentElement ? window.getComputedStyle(el.parentElement) : null;
@@ -1103,7 +1116,26 @@ export function isTextContainer(node) {
     // Semantic inline tags are often promoted to block layout for a card lead
     // or explanatory line. Their computed layout, not their HTML tag name,
     // determines whether they belong to the same editable text flow.
-    if (!['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'span', 'strong', 'b', 'em', 'i', 'small', 'mark', 'a'].includes(tag)) {
+    if (
+      ![
+        'p',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'blockquote',
+        'span',
+        'strong',
+        'b',
+        'em',
+        'i',
+        'small',
+        'mark',
+        'a',
+      ].includes(tag)
+    ) {
       return false;
     }
 
@@ -2032,6 +2064,29 @@ function isBlockFlowDisplay(display) {
   );
 }
 
+/**
+ * Whether an element's own CSS takes it out of the inline text flow.
+ *
+ * The browser paints such an element where its own geometry says, not where
+ * the surrounding text run happens to reach. A PowerPoint text run cannot
+ * express that: folding one into a run keeps the characters but loses the
+ * placement, so a marker sitting beside its line becomes a paragraph above it.
+ *
+ * `position: relative` stays in flow — it only shifts the painted box — and is
+ * the common anchor for a `::before` marker, so it is deliberately not listed.
+ *
+ * @param {CSSStyleDeclaration} style - Computed style of the element
+ * @returns {boolean} Whether the element is out of the text flow
+ */
+export function isOutOfTextFlow(style) {
+  if (!style) return false;
+  const position = String(style.position || 'static').toLowerCase();
+  if (position === 'absolute' || position === 'fixed') return true;
+  if (String(style.float || 'none').toLowerCase() !== 'none') return true;
+  const transform = String(style.transform || 'none').toLowerCase();
+  return transform !== 'none' && transform !== '';
+}
+
 function hasNonZeroBoxSpacing(style) {
   return [
     style.marginTop,
@@ -2141,8 +2196,19 @@ function alphaCounter(value, upper) {
 function romanCounter(value, upper) {
   if (value <= 0 || value >= 4000) return String(value);
   const numerals = [
-    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
-    [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+    [1000, 'm'],
+    [900, 'cm'],
+    [500, 'd'],
+    [400, 'cd'],
+    [100, 'c'],
+    [90, 'xc'],
+    [50, 'l'],
+    [40, 'xl'],
+    [10, 'x'],
+    [9, 'ix'],
+    [5, 'v'],
+    [4, 'iv'],
+    [1, 'i'],
   ];
   let remaining = value;
   let result = '';
@@ -2156,7 +2222,9 @@ function romanCounter(value, upper) {
 }
 
 function formatCounter(value, style = 'decimal') {
-  const normalizedStyle = String(style || 'decimal').trim().toLowerCase();
+  const normalizedStyle = String(style || 'decimal')
+    .trim()
+    .toLowerCase();
   if (normalizedStyle === 'decimal-leading-zero') {
     return value >= 0 && value < 10 ? `0${value}` : String(value);
   }
@@ -2200,7 +2268,7 @@ function resolveGeneratedContent(value, counterStacks, node) {
 
   const tokens = Array.from(normalized.matchAll(/"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^\s]+)/g));
   return tokens
-    .map((token) => (token[1] ?? token[2]) === undefined ? token[3] : decodeCssString(token[1] ?? token[2]))
+    .map((token) => ((token[1] ?? token[2]) === undefined ? token[3] : decodeCssString(token[1] ?? token[2])))
     .join('');
 }
 
@@ -2248,8 +2316,7 @@ export function buildPseudoContentMap(root) {
   const resolvePseudo = (node, pseudoType) => {
     const style = window.getComputedStyle(node, pseudoType);
     const rawContent = String(style.content || '').trim();
-    const isGenerated =
-      style.display !== 'none' && rawContent && rawContent !== 'none' && rawContent !== 'normal';
+    const isGenerated = style.display !== 'none' && rawContent && rawContent !== 'none' && rawContent !== 'normal';
     if (!isGenerated) {
       const entry = resolved.get(node) || {};
       entry[pseudoType] = '';
