@@ -1143,9 +1143,7 @@ export function isTextContainer(node) {
     if (style.display !== 'block') return false;
     const parentDisplay = el.parentElement ? window.getComputedStyle(el.parentElement).display : '';
     if (parentDisplay.includes('flex') || parentDisplay.includes('grid')) return false;
-    if (style.position && style.position !== 'static') return false;
-    if (style.float && style.float !== 'none') return false;
-    if (style.transform && style.transform !== 'none') return false;
+    if (isOutOfTextFlow(style)) return false;
     if (style.overflow && style.overflow !== 'visible') return false;
     if (
       parseFloat(style.paddingTop) ||
@@ -2065,26 +2063,35 @@ function isBlockFlowDisplay(display) {
 }
 
 /**
- * Whether an element's own CSS takes it out of the inline text flow.
+ * Whether the browser paints an element somewhere other than where the
+ * surrounding text flow would place it.
  *
- * The browser paints such an element where its own geometry says, not where
- * the surrounding text run happens to reach. A PowerPoint text run cannot
- * express that: folding one into a run keeps the characters but loses the
- * placement, so a marker sitting beside its line becomes a paragraph above it.
+ * This is the single question behind every decision to fold content into a
+ * shared PowerPoint text run: a run carries characters and their order, never
+ * a placement of its own. Folding in such an element keeps its text and loses
+ * where it belongs — a marker beside its line turns into a paragraph above it.
  *
- * `position: relative` stays in flow — it only shifts the painted box — and is
- * the common anchor for a `::before` marker, so it is deliberately not listed.
+ * It also answers whether a child interrupts the line: out-of-flow content
+ * never does, whatever its `display` says.
+ *
+ * Deliberately narrow: only content that leaves the flow entirely. Rejecting a
+ * merely shifted box — `position: relative` with an offset — costs more than it
+ * saves, because the fallback is a text box of its own, and boxes sized to
+ * their content overlap each other as soon as Office wraps differently. A
+ * relative offset measured on the fidelity probes produced five overlaps where
+ * folding the span into the run produced none. A run that paints a word a few
+ * points off is the smaller error.
  *
  * @param {CSSStyleDeclaration} style - Computed style of the element
- * @returns {boolean} Whether the element is out of the text flow
+ * @returns {boolean} Whether the element leaves the text flow
  */
 export function isOutOfTextFlow(style) {
   if (!style) return false;
-  const position = String(style.position || 'static').toLowerCase();
-  if (position === 'absolute' || position === 'fixed') return true;
   if (String(style.float || 'none').toLowerCase() !== 'none') return true;
   const transform = String(style.transform || 'none').toLowerCase();
-  return transform !== 'none' && transform !== '';
+  if (transform !== 'none' && transform !== '') return true;
+  const position = String(style.position || 'static').toLowerCase();
+  return position === 'absolute' || position === 'fixed';
 }
 
 function hasNonZeroBoxSpacing(style) {
@@ -2109,12 +2116,7 @@ export function isInlineTextPseudoStyle(style) {
   if (!style) return false;
 
   const display = String(style.display || '').toLowerCase();
-  const position = String(style.position || 'static').toLowerCase();
-  const float = String(style.float || 'none').toLowerCase();
-  const transform = String(style.transform || 'none').toLowerCase();
-  if (display !== 'inline' || position !== 'static' || float !== 'none' || transform !== 'none') {
-    return false;
-  }
+  if (display !== 'inline' || isOutOfTextFlow(style)) return false;
 
   const background = parseColor(style.backgroundColor, style);
   const border = parseColor(style.borderColor, style);
@@ -2504,7 +2506,13 @@ export function collectTextParts(
         trimNextLeading = true;
       } else {
         const childStyle = window.getComputedStyle(child);
-        const isBlock = isBlockFlowDisplay(childStyle.display);
+        // Out-of-flow content never breaks the line it sits beside, whatever
+        // its `display` is. Without this, an absolutely positioned marker
+        // opened and closed a paragraph around itself — the callers that flatten
+        // text are expected to keep such a child out entirely, and this keeps
+        // the damage to a misplaced glyph rather than a torn-up paragraph when
+        // one of them does not.
+        const isBlock = isBlockFlowDisplay(childStyle.display) && !isOutOfTextFlow(childStyle);
         if (isBlock && parts.length > 0 && !parts[parts.length - 1].options?.breakLine) {
           parts.push({ text: '', options: { breakLine: true } });
         }

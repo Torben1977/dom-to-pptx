@@ -40,6 +40,14 @@ const KNOWN_DEFECTS = {
   'stacked-divs': [],
   'table-cells': ['drift', 'missing-word', 'overflow'],
   'table-below': [],
+  // A table cell is flattened without any gate, so its absolutely positioned
+  // marker can only join the run or open a paragraph; it joins, which glues it
+  // to the first word ("!Nachfrage"). Giving it a box of its own needs the cell
+  // to stop being a native PowerPoint cell — a separate decision.
+  'table-marker': ['missing-word'],
+  // A span shifted with `position: relative` stays in the run on purpose: the
+  // alternative is one box per fragment, which overlaps. Faithful today.
+  'relative-offset': [],
 };
 
 let outputDir;
