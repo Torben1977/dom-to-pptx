@@ -1,6 +1,7 @@
 // src/__tests__/pptx-normalizer.test.js
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
+import { encodeGradientTransport } from '../utils.js';
 import { normalizePptxZip } from '../pptx-normalizer.js';
 
 const CONTENT_TYPES_NS = 'http://schemas.openxmlformats.org/package/2006/content-types';
@@ -250,6 +251,77 @@ describe('normalizePptxZip', () => {
     expect(doc.getElementsByTagName('a:buChar')).toHaveLength(0);
     expect(doc.getElementsByTagName('a:buSzPct')).toHaveLength(0);
     expect(doc.getElementsByTagName('a:buNone')).toHaveLength(1);
+  });
+
+  it('turns the block-indent sentinel bullet into no bullet and indents every line alike', async () => {
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', buildContentTypes({ defaults: [{ ext: 'xml', contentType: 'application/xml' }] }));
+    zip.file(
+      'ppt/slides/slide1.xml',
+      `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody>
+    <a:p>
+      <a:pPr algn="l" marL="381000" indent="-381000"><a:buSzPct val="100000"/><a:buChar char="\ufdd1"/></a:pPr>
+      <a:r><a:t>Eingerückter Absatz</a:t></a:r>
+    </a:p>
+  </p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>`
+    );
+
+    await normalizePptxZip(zip);
+
+    const doc = new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'text/xml');
+    const pPr = doc.getElementsByTagName('a:pPr')[0];
+    expect(pPr.getAttribute('marL')).toBe('381000');
+    expect(pPr.getAttribute('indent')).toBe('0');
+    expect(doc.getElementsByTagName('a:buChar')).toHaveLength(0);
+    expect(doc.getElementsByTagName('a:buSzPct')).toHaveLength(0);
+    expect(doc.getElementsByTagName('a:buNone')).toHaveLength(1);
+  });
+
+  it('turns a transported gradient into a native gradient fill and keeps only the own alt text', async () => {
+    const payload = encodeGradientTransport({
+      angle: 90,
+      stops: [
+        { pos: 0, hex: '0F766E', opacity: 1 },
+        { pos: 1, hex: 'F59E0B', opacity: 0.5 },
+      ],
+    });
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', buildContentTypes({ defaults: [{ ext: 'xml', contentType: 'application/xml' }] }));
+    zip.file(
+      'ppt/slides/slide1.xml',
+      `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:nvSpPr><p:cNvPr id="2" name="__z_0__dom_3__type_shape__grad_${payload}" descr="__z_0__dom_3__type_shape__grad_${payload}"/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="0F766E"/></a:solidFill></p:spPr></p:sp>
+    <p:pic><p:nvPicPr><p:cNvPr id="3" name="__z_1__dom_4__type_image" descr="__z_1__dom_4__type_image Pfeil zwischen zwei Knoten"/></p:nvPicPr><p:spPr/></p:pic>
+    <p:pic><p:nvPicPr><p:cNvPr id="4" name="__z_2__dom_5__type_image" descr="__z_2__dom_5__type_image"/></p:nvPicPr><p:spPr/></p:pic>
+  </p:spTree></p:cSld>
+</p:sld>`
+    );
+
+    await normalizePptxZip(zip);
+
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    expect(doc.getElementsByTagName('a:solidFill')).toHaveLength(0);
+    const stops = Array.from(doc.getElementsByTagName('a:gs'), (gs) => [
+      gs.getAttribute('pos'),
+      gs.getElementsByTagName('a:srgbClr')[0].getAttribute('val'),
+      gs.getElementsByTagName('a:alpha')[0]?.getAttribute('val') ?? null,
+    ]);
+    expect(stops).toEqual([
+      ['0', '0F766E', null],
+      ['100000', 'F59E0B', '50000'],
+    ]);
+    expect(doc.getElementsByTagName('a:lin')[0].getAttribute('ang')).toBe('0');
+    const descriptions = Array.from(doc.getElementsByTagName('p:cNvPr'), (node) => node.getAttribute('descr'));
+    expect(descriptions).toEqual([null, 'Pfeil zwischen zwei Knoten', null]);
+    expect(xml).not.toContain('__type_');
+    expect(xml).not.toContain('__grad_');
   });
 
   it('ensures mutual exclusivity of bullet elements by removing buNone when active bullet is present', async () => {

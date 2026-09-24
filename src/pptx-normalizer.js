@@ -1,7 +1,7 @@
 // src/pptx-normalizer.js
 import { buildTimingXml } from './animations/xml-templates.js';
 import { getTransitionXml } from './animations/transitions.js';
-import { HANGING_INDENT_BULLET_CODE } from './utils.js';
+import { BLOCK_INDENT_BULLET_CODE, HANGING_INDENT_BULLET_CODE, decodeGradientTransport } from './utils.js';
 //
 // Defensive OOXML normalizer that runs over the PPTX produced by PptxGenJS
 // before we hand the .pptx blob to the user. Microsoft PowerPoint refuses to
@@ -47,6 +47,45 @@ const pPrOrder = [
  * @param {import('jszip')} zip - JSZip instance with the loaded PPTX package.
  * @returns {Promise<void>}
  */
+const DRAWING_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+
+/**
+ * Replaces the placeholder solid fill of a shape with the native linear gradient
+ * it carried in its name (see encodeGradientTransport). OOXML measures the angle
+ * from the left edge clockwise, CSS from the top: ang = (css - 90) in 60000ths.
+ */
+function applyGradientFill(doc, shape, gradient) {
+  const spPr = Array.from(shape.childNodes).find((node) => node.nodeType === 1 && node.localName === 'spPr');
+  if (!spPr) return;
+  const gradFill = doc.createElementNS(DRAWING_NS, 'a:gradFill');
+  gradFill.setAttribute('rotWithShape', '1');
+  const gsLst = doc.createElementNS(DRAWING_NS, 'a:gsLst');
+  for (const stop of gradient.stops) {
+    const gs = doc.createElementNS(DRAWING_NS, 'a:gs');
+    gs.setAttribute('pos', String(Math.round(Math.max(0, Math.min(1, stop.pos)) * 100000)));
+    const color = doc.createElementNS(DRAWING_NS, 'a:srgbClr');
+    color.setAttribute('val', stop.hex.replace('#', '').toUpperCase());
+    if (stop.opacity < 1) {
+      const alpha = doc.createElementNS(DRAWING_NS, 'a:alpha');
+      alpha.setAttribute('val', String(Math.round(Math.max(0, stop.opacity) * 100000)));
+      color.appendChild(alpha);
+    }
+    gs.appendChild(color);
+    gsLst.appendChild(gs);
+  }
+  gradFill.appendChild(gsLst);
+  const lin = doc.createElementNS(DRAWING_NS, 'a:lin');
+  lin.setAttribute('ang', String(Math.round((((gradient.angle - 90) % 360) + 360) % 360) * 60000));
+  lin.setAttribute('scaled', '0');
+  gradFill.appendChild(lin);
+  const solid = Array.from(spPr.childNodes).find((node) => node.nodeType === 1 && node.localName === 'solidFill');
+  if (solid) spPr.replaceChild(gradFill, solid);
+  else {
+    const geometry = Array.from(spPr.childNodes).find((node) => node.nodeType === 1 && /Geom$/.test(node.localName));
+    spPr.insertBefore(gradFill, geometry ? geometry.nextSibling : spPr.firstChild);
+  }
+}
+
 export async function normalizePptxZip(zip, options = {}) {
   if (!zip) return;
 
@@ -206,13 +245,20 @@ function cleanParagraphProperties(doc) {
       // A paragraph that only wanted a hanging indent asked for the sentinel
       // bullet, because PptxGenJS writes marL/indent for bulleted paragraphs
       // only. Take the glyph back out: the indent stays, the marker goes.
+      const sentinelChar = (code) => String.fromCodePoint(Number.parseInt(code, 16));
       const sentinel = Array.from(targetPPr.childNodes).find(
         (node) =>
           node.nodeType === 1 &&
           node.localName === 'buChar' &&
-          node.getAttribute('char') === String.fromCodePoint(Number.parseInt(HANGING_INDENT_BULLET_CODE, 16))
+          [sentinelChar(HANGING_INDENT_BULLET_CODE), sentinelChar(BLOCK_INDENT_BULLET_CODE)].includes(
+            node.getAttribute('char')
+          )
       );
       if (sentinel) {
+        // A block indent moves every line, the first one too: no hanging part.
+        if (sentinel.getAttribute('char') === sentinelChar(BLOCK_INDENT_BULLET_CODE)) {
+          targetPPr.setAttribute('indent', '0');
+        }
         targetPPr.removeChild(sentinel);
         for (const size of Array.from(targetPPr.childNodes).filter(
           (node) => node.nodeType === 1 && node.localName === 'buSzPct'
@@ -347,7 +393,8 @@ function sortSpTree(doc) {
         const nameAttr = cNvPr.getAttribute('name') || '';
         let hasVal = false;
 
-        const descrMatch = descr.match(/^__z_(\d+)__dom_(\d+)(.*)/);
+        // The transport (order, type, gradient) precedes the element's own alt text.
+        const descrMatch = descr.match(/^__z_(\d+)__dom_(\d+)(?:__type_[^_\s]*)?(?:__grad_[A-Za-z0-9_-]*)?(.*)$/s);
         if (descrMatch) {
           zVal = parseInt(descrMatch[1], 10);
           domVal = parseInt(descrMatch[2], 10);
@@ -358,6 +405,12 @@ function sortSpTree(doc) {
           } else {
             cNvPr.removeAttribute('descr');
           }
+          mutated = true;
+        }
+
+        const gradientMatch = nameAttr.match(/__grad_([A-Za-z0-9_-]+)/);
+        if (gradientMatch) {
+          applyGradientFill(doc, el, decodeGradientTransport(gradientMatch[1]));
           mutated = true;
         }
 

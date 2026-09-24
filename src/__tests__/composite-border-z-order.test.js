@@ -63,7 +63,10 @@ describe('composite border z-order', () => {
       const cardIndex = drawingNodes.findIndex((node) =>
         Array.from(node.getElementsByTagName('a:t')).some((text) => text.textContent.includes('Working hypothesis'))
       );
-      const borderIndex = drawingNodes.findIndex((node) => node.tagName === 'p:pic');
+      // The 8px accent is drawn as its own native rectangle in the border colour.
+      const borderIndex = drawingNodes.findIndex((node) =>
+        Array.from(node.getElementsByTagName('a:srgbClr')).some((color) => color.getAttribute('val') === 'E2A72E')
+      );
 
       expect(cardIndex).toBeGreaterThanOrEqual(0);
       expect(borderIndex).toBeGreaterThan(cardIndex);

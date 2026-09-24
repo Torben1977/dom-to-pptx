@@ -982,6 +982,15 @@ export function resolveHangingIndentPt(node, style, scale) {
 export const HANGING_INDENT_BULLET_CODE = 'FDD0';
 
 /**
+ * Sentinel for a paragraph indented as a whole (every line starts at marL, the
+ * first one too): PptxGenJS writes marL/indent only for bulleted paragraphs and
+ * always as a hanging pair, so `normalizePptxZip` removes this glyph, sets the
+ * indent back to 0 and adds `<a:buNone/>`. U+FDD1, like U+FDD0 a permanent
+ * noncharacter, can never be real text.
+ */
+export const BLOCK_INDENT_BULLET_CODE = 'FDD1';
+
+/**
  * Gives every paragraph in `textParts` a hanging indent of `hangPt` points.
  *
  * OpenXML states a hanging first line as the pair marL/indent, and PptxGenJS
@@ -993,6 +1002,22 @@ export const HANGING_INDENT_BULLET_CODE = 'FDD0';
  * leaving marL/indent with `<a:buNone/>`, which is what a hanging indent
  * without a marker looks like in OpenXML.
  */
+/**
+ * Indents every paragraph in `textParts` without its own marker by `indentPt`
+ * points, all lines alike — a block that starts right of the text frame's
+ * content edge, e.g. through margin-left. See BLOCK_INDENT_BULLET_CODE.
+ */
+export function applyBlockIndent(textParts, indentPt) {
+  let startsParagraph = true;
+  for (const part of textParts || []) {
+    if (!part.options) part.options = {};
+    if (startsParagraph && !part.options.bullet && part.text !== '') {
+      part.options.bullet = { characterCode: BLOCK_INDENT_BULLET_CODE, indent: indentPt };
+    }
+    startsParagraph = Boolean(part.options.breakLine);
+  }
+}
+
 export function applyHangingIndent(textParts, hangPt) {
   let startsParagraph = true;
   for (const part of textParts || []) {
@@ -1551,6 +1576,85 @@ export function getVisibleShadow(shadowStr, scale) {
 /**
  * Generates an SVG image for gradients, supporting degrees and keywords.
  */
+const GRADIENT_SIDE_ANGLES = {
+  top: 0,
+  right: 90,
+  bottom: 180,
+  left: 270,
+  'top right': 45,
+  'right top': 45,
+  'bottom right': 135,
+  'right bottom': 135,
+  'bottom left': 225,
+  'left bottom': 225,
+  'top left': 315,
+  'left top': 315,
+};
+
+/**
+ * A single CSS linear-gradient as `{ angle, stops: [{ pos, hex, opacity }] }` (angle in CSS
+ * degrees, 0 = to top; pos 0..1), or null when it cannot be held natively: several layers,
+ * repeating, or stop positions in anything but percent. Missing positions are spread evenly
+ * between their neighbours, as CSS does.
+ */
+export function parseLinearGradient(bgString) {
+  const text = String(bgString || '').trim();
+  const match = text.match(/^linear-gradient\((.*)\)$/i);
+  if (!match || /\)\s*,\s*[a-z-]+-gradient\(/i.test(text)) return null;
+  const parts = match[1].split(/,(?![^()]*\))/).map((part) => part.trim());
+  let angle = 180;
+  const head = parts[0].toLowerCase();
+  if (head.startsWith('to ')) {
+    const side = head.slice(3).trim().replace(/\s+/g, ' ');
+    if (!(side in GRADIENT_SIDE_ANGLES)) return null;
+    angle = GRADIENT_SIDE_ANGLES[side];
+    parts.shift();
+  } else if (/^-?[\d.]+(deg|rad|turn|grad)$/.test(head)) {
+    const value = parseFloat(head);
+    angle = head.endsWith('rad')
+      ? (value * 180) / Math.PI
+      : head.endsWith('turn')
+        ? value * 360
+        : head.endsWith('grad')
+          ? value * 0.9
+          : value;
+    parts.shift();
+  }
+  if (parts.length < 2) return null;
+  const stops = [];
+  for (const part of parts) {
+    const stop = part.match(/^(.*?)(?:\s+(-?[\d.]+)%)?$/);
+    if (!stop || /\d(px|pt|em|rem)\s*$/.test(part)) return null;
+    const color = parseColor(stop[1].trim());
+    if (!color.hex) return null;
+    stops.push({ hex: color.hex, opacity: color.opacity, pos: stop[2] === undefined ? null : Number(stop[2]) / 100 });
+  }
+  if (stops[0].pos === null) stops[0].pos = 0;
+  if (stops[stops.length - 1].pos === null) stops[stops.length - 1].pos = 1;
+  for (let index = 1; index < stops.length - 1; index++) {
+    if (stops[index].pos !== null) continue;
+    const next = stops.findIndex((candidate, at) => at > index && candidate.pos !== null);
+    const from = stops[index - 1].pos;
+    stops[index].pos = from + (stops[next].pos - from) / (next - index + 1);
+  }
+  return { angle: ((angle % 360) + 360) % 360, stops };
+}
+
+/** Gradient transported through the shape name (PptxGenJS writes no gradient fills), base64url JSON. */
+export function encodeGradientTransport(gradient) {
+  const json = JSON.stringify({
+    a: gradient.angle,
+    s: gradient.stops.map((stop) => [stop.pos, stop.hex, stop.opacity]),
+  });
+  return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function decodeGradientTransport(payload) {
+  const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+  const json = JSON.parse(atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4)));
+  return { angle: json.a, stops: json.s.map(([pos, hex, opacity]) => ({ pos, hex, opacity })) };
+}
+
 export function generateGradientSVG(w, h, bgString, radius, border) {
   try {
     const match = bgString.match(/linear-gradient\((.*)\)/);
@@ -2559,9 +2663,20 @@ export function collectTextParts(
   activeHyperlink = null,
   isRoot = true,
   inheritedOpacity = 1,
-  pseudoContentByNode = null
+  pseudoContentByNode = null,
+  frameLeft = null
 ) {
   if (node.nodeType === 1 && isVisuallySuppressed(node)) return [];
+
+  // Where the text frame's lines start; a block inside that starts further right
+  // is indented by the measured difference, not by whatever margin produced it.
+  if (frameLeft === null && isRoot && node.nodeType === 1 && typeof node.getBoundingClientRect === 'function') {
+    const rootStyle = window.getComputedStyle(node);
+    frameLeft =
+      node.getBoundingClientRect().left +
+      (parseFloat(rootStyle.borderLeftWidth) || 0) +
+      (parseFloat(rootStyle.paddingLeft) || 0);
+  }
 
   const parts = [];
   let hyperlink = activeHyperlink;
@@ -2726,8 +2841,17 @@ export function collectTextParts(
           hyperlink,
           false,
           childInheritedOpacity,
-          pseudoContentByNode
+          pseudoContentByNode,
+          frameLeft
         );
+        if (isBlock && frameLeft !== null && childParts.length > 0) {
+          const childLeft =
+            child.getBoundingClientRect().left +
+            (parseFloat(childStyle.borderLeftWidth) || 0) +
+            (parseFloat(childStyle.paddingLeft) || 0);
+          const indentPx = childLeft - frameLeft;
+          if (indentPx > 0.5) applyBlockIndent(childParts, indentPx * 0.75 * scale);
+        }
         if (childParts.length > 0) parts.push(...childParts);
 
         if (isBlock) {

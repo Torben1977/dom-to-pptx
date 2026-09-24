@@ -32,6 +32,8 @@ import {
   generateBlurredSVG,
   getBorderInfo,
   generateCompositeBorderSVG,
+  encodeGradientTransport,
+  parseLinearGradient,
   resolveCssCornerRadii,
   generateCustomShapeSVG,
   getUsedFontFamilies,
@@ -642,8 +644,13 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   // 4. Add to Slide
   for (let i = 0; i < finalQueue.length; i++) {
     const item = finalQueue[i];
-    const transportVal = `__z_${i}__dom_${item.domOrder}__type_${item.type}`;
-    item.options.altText = transportVal;
+    // Order, type and — for a native gradient — the fill travel past PptxGenJS in
+    // the shape name and description; normalizePptxZip reads them back and keeps
+    // only the element's own alt text in the description.
+    const gradientTransport = item.gradient ? `__grad_${encodeGradientTransport(item.gradient)}` : '';
+    const transportVal = `__z_${i}__dom_${item.domOrder}__type_${item.type}${gradientTransport}`;
+    const ownAltText = item.options.altText;
+    item.options.altText = ownAltText ? `${transportVal} ${ownAltText}` : transportVal;
     item.options.objectName = transportVal;
 
     if (item.type === 'shape') slide.addShape(item.shapeType, item.options);
@@ -2847,6 +2854,9 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         w,
         h,
         rotate: rotation,
+        ...((node.getAttribute('aria-label') || node.querySelector('title')?.textContent?.trim()) && {
+          altText: node.getAttribute('aria-label') || node.querySelector('title').textContent.trim(),
+        }),
         // svgToSvg/svgToPng freezes the SVG element's own opacity into the
         // serialized asset. Apply only ancestor compositing here.
         ...pictureTransparency(inheritedOpacity),
@@ -2894,6 +2904,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         h,
         rotate: rotation,
         data: null,
+        ...(node.getAttribute('alt') && { altText: node.getAttribute('alt') }),
         ...pictureTransparency(safeOpacity),
         ...(hyperlink && { hyperlink }),
       },
@@ -3086,13 +3097,17 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       if (hangPt > 0) applyHangingIndent(textParts, hangPt);
 
       const padding = getPadding(style, config.scale);
+      // The text frame spans the border box, so the inset is border plus padding —
+      // as in CSS, where the content starts inside both. Text beside a thick
+      // border otherwise started up to the border's width too far out.
+      const borderPt = (value) => (parseFloat(value) || 0) * 0.75 * config.scale;
       // getPadding returns [top, right, bottom, left]; createShapeMargin
       // normalizes it to PptxGenJS's [lIns, rIns, bIns, tIns] point array
       const margin = createShapeMargin(
-        padding[0] * 72, // top
-        padding[1] * 72, // right
-        padding[2] * 72, // bottom
-        padding[3] * 72 - hangPt // left
+        padding[0] * 72 + borderPt(style.borderTopWidth), // top
+        padding[1] * 72 + borderPt(style.borderRightWidth), // right
+        padding[2] * 72 + borderPt(style.borderBottomWidth), // bottom
+        padding[3] * 72 + borderPt(style.borderLeftWidth) - hangPt // left
       );
 
       const renderedSingleLine = isRenderedSingleLine(node);
@@ -3198,7 +3213,32 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     } else {
       let bgData;
       let padIn = 0;
-      if (softEdge) {
+      // A plain linear gradient stays a native fill: a shape carrying the first
+      // stop as placeholder, the gradient itself transported to the normalizer.
+      // Borders and per-corner radii keep the picture that can draw them.
+      const nativeGradient =
+        !softEdge && !hasBorder && !hasPartialBorderRadius ? parseLinearGradient(style.backgroundImage) : null;
+      if (nativeGradient) {
+        const stops = nativeGradient.stops.map((stop) => ({ ...stop, opacity: stop.opacity * safeOpacity }));
+        const radiusIn = Math.min(borderRadiusValue, Math.min(widthPx, heightPx) / 2) * PX_TO_INCH * config.scale;
+        items.push({
+          type: 'shape',
+          zIndex: parentSortKey.concat([-Infinity]),
+          domOrder,
+          shapeType: radiusIn > 0 ? pptx.ShapeType.roundRect : pptx.ShapeType.rect,
+          gradient: { angle: nativeGradient.angle, stops },
+          options: {
+            x,
+            y,
+            w,
+            h,
+            rotate: rotation,
+            fill: { color: stops[0].hex, transparency: (1 - stops[0].opacity) * 100 },
+            ...(radiusIn > 0 && { rectRadius: radiusIn }),
+            ...(hyperlink && { hyperlink }),
+          },
+        });
+      } else if (softEdge) {
         const svgInfo = generateBlurredSVG(widthPx, heightPx, bgColorObj.hex, borderRadiusValue, softEdge);
         bgData = svgInfo.data;
         padIn = svgInfo.padding * PX_TO_INCH * config.scale;
@@ -3350,11 +3390,17 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         });
       }
     } else {
+      // PowerPoint strokes a shape's outline centred on its geometry; CSS paints a
+      // border inside the border box. Insetting the geometry by half the stroke
+      // puts the stroke where the browser painted the border.
+      const strokeInset = hasUniformBorder
+        ? ((parseFloat(style.borderTopWidth) || 0) / 2) * PX_TO_INCH * config.scale
+        : 0;
       const shapeOpts = {
-        x,
-        y,
-        w,
-        h,
+        x: x + strokeInset,
+        y: y + strokeInset,
+        w: Math.max(0, w - 2 * strokeInset),
+        h: Math.max(0, h - 2 * strokeInset),
         rotate: rotation,
         // A text-bearing anchor already carries its link on the editable text
         // runs. Passing the same link at shape level makes PptxGenJS emit an
@@ -3390,7 +3436,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       } else if (radiusPx > 0) {
         shapeType = pptx.ShapeType.roundRect;
         let cappedRadiusPx = Math.min(radiusPx, minDimension / 2);
-        shapeOpts.rectRadius = cappedRadiusPx * PX_TO_INCH * config.scale;
+        shapeOpts.rectRadius = Math.max(0, cappedRadiusPx * PX_TO_INCH * config.scale - strokeInset);
       }
 
       if (textPayload && shapeType === pptx.ShapeType.ellipse) {
@@ -3428,15 +3474,17 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           },
         });
       } else if (textPayload) {
+        // The text sits in the inset shape, so its inset shrinks by the same amount.
+        const strokeInsetPt = strokeInset * 72;
         const textOptions = {
           shape: shapeType,
           ...shapeOpts,
-          w,
-          h,
           rotate: rotation,
           align: textPayload.align,
           valign: textPayload.valign,
-          margin: textPayload.margin,
+          margin: strokeInsetPt
+            ? textPayload.margin.map((value) => Math.max(0, value - strokeInsetPt))
+            : textPayload.margin,
           ...(textPayload.rtlMode && { rtlMode: true }),
           wrap: textPayload.wrap,
           ...(textPayload.fit && { fit: textPayload.fit }),
@@ -3462,12 +3510,27 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     }
 
     if (hasCompositeBorder) {
-      const borderSvgData = generateCompositeBorderSVG(
-        widthPx,
-        heightPx,
-        resolveCssCornerRadii(style, widthPx, heightPx),
-        borderInfo.sides
-      );
+      const radii = resolveCssCornerRadii(style, widthPx, heightPx);
+      const rounded = Object.values(radii).some((corner) => corner.x > 0 || corner.y > 0);
+      // Straight sides stay native shapes, one per side, so the border remains
+      // editable in PowerPoint. Only a rounded or rotated box needs the picture
+      // that follows its contour.
+      if (!rounded && rotation === 0) {
+        items.push(
+          ...createCompositeBorderItems(
+            borderInfo.sides,
+            x,
+            y,
+            w,
+            h,
+            config.scale,
+            parentSortKey.concat([0, 0]),
+            domOrder
+          )
+        );
+      }
+      const borderSvgData =
+        !rounded && rotation === 0 ? null : generateCompositeBorderSVG(widthPx, heightPx, radii, borderInfo.sides);
       if (borderSvgData) {
         items.push({
           type: 'image',

@@ -293,6 +293,24 @@ function shapeWithFill(documentNode, color) {
   );
 }
 
+/**
+ * The shape as painted: PowerPoint centres an outline on the geometry, so the
+ * visible box reaches half a stroke beyond the transform on every side.
+ */
+function outerTransformOf(shape) {
+  const transform = transformOf(shape);
+  const line = shape.getElementsByTagName('a:ln')[0];
+  const noFill = line?.getElementsByTagName('a:noFill').length > 0;
+  const half = line && !noFill ? Number(line.getAttribute('w') || 0) / 2 : 0;
+  return {
+    ...transform,
+    x: transform.x - half,
+    y: transform.y - half,
+    w: transform.w + 2 * half,
+    h: transform.h + 2 * half,
+  };
+}
+
 function transformOf(shape) {
   const xfrm = shape.getElementsByTagName('a:xfrm')[0];
   const off = xfrm.getElementsByTagName('a:off')[0];
@@ -461,7 +479,7 @@ describe('known renderer boundaries', () => {
     const documentNode = await slideDocument(10);
     const hostShape = shapeWithFill(documentNode, 'FEE2E2');
     expect(hostShape).toBeDefined();
-    expect(transformOf(hostShape)).toMatchObject({
+    expect(outerTransformOf(hostShape)).toMatchObject({
       x: 120 * EMU_PER_PX,
       y: 100 * EMU_PER_PX,
       w: 120 * EMU_PER_PX,

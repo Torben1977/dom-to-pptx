@@ -27,13 +27,11 @@ describe('margin helpers', () => {
     ['6px padding', 4.5],
   ])('keeps the cell margin in points for %s', async (_, pt) => {
     const pptx = new PptxGenJS();
-    pptx
-      .addSlide()
-      .addTable([[{ text: 'Zelle', options: { margin: createTableCellMargin(pt, pt, pt, pt) } }]], {
-        x: 0,
-        y: 0,
-        w: 4,
-      });
+    pptx.addSlide().addTable([[{ text: 'Zelle', options: { margin: createTableCellMargin(pt, pt, pt, pt) } }]], {
+      x: 0,
+      y: 0,
+      w: 4,
+    });
     const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }));
     const xml = await zip.file('ppt/slides/slide1.xml').async('string');
     const emu = Math.round(pt * 12700);

@@ -15,8 +15,14 @@ function shapeFor(xml, text) {
   return xml.slice(shapeStart, shapeEnd);
 }
 
+/**
+ * Painted width: PowerPoint centres an outline on the geometry, so a stroked
+ * shape reaches half a stroke beyond its transform on each side.
+ */
 function width(shape) {
-  return Number(shape.match(/<a:ext cx="(\d+)"/)?.[1]);
+  const cx = Number(shape.match(/<a:ext cx="(\d+)"/)?.[1]);
+  const line = shape.match(/<a:ln w="(\d+)"[^>]*>(?!<a:noFill)/);
+  return cx + (line ? Number(line[1]) : 0);
 }
 
 function geometry(shape) {
