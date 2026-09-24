@@ -69,9 +69,10 @@ describe('extractTableData', () => {
     document.body.appendChild(table);
 
     try {
-      // PptxGenJS takes cell margins as [top, right, bottom, left] in points.
+      // Cell margins go to PptxGenJS as [top, right, bottom, left] in inches (see
+      // createTableCellMargin: points would flip to inches below a 1 pt top margin).
       const margin = extractTableData(table, 1).rows[0][0].options.margin;
-      expect(margin.map((value) => Number(value.toFixed(4)))).toEqual([6, 7.5, 6, 7.5]);
+      expect(margin.map((value) => Number((value * 72).toFixed(4)))).toEqual([6, 7.5, 6, 7.5]);
     } finally {
       table.remove();
     }
@@ -86,7 +87,7 @@ describe('extractTableData', () => {
     try {
       // Half of the 2px gap belongs to each of the two cells that share it.
       const margin = extractTableData(table, 1).rows[0][0].options.margin;
-      expect(margin.map((value) => Number(value.toFixed(4)))).toEqual([6.75, 8.25, 6.75, 8.25]);
+      expect(margin.map((value) => Number((value * 72).toFixed(4)))).toEqual([6.75, 8.25, 6.75, 8.25]);
     } finally {
       table.remove();
     }

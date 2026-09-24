@@ -1005,21 +1005,25 @@ export function applyHangingIndent(textParts, hangPt) {
 }
 
 /**
- * Creates PPTX table cell margin array in points.
+ * Creates the PPTX table cell margin array [top, right, bottom, left] in inches.
  *
- * NOTE: Upstream PptxGenJS consumes table cell margins as
- * [marT, marR, marB, marL] (top, right, bottom, left in points or inches).
- * This helper accepts standard CSS box-model order (top, right, bottom, left)
- * and normalizes it to PptxGenJS's expected internal array order.
+ * PptxGenJS decides the unit of a cell margin from its first value alone:
+ * `margin[0] >= 1` is read as points, anything smaller as inches (its own
+ * backwards-compat rule since v3.8). Handing it points therefore flipped the
+ * whole margin to inches whenever the top padding was below 1 pt — the browser's
+ * default 1px cell padding (0.75 pt) became 0.75 inch on every side, and the
+ * cell text broke letter by letter. Inches keep the unit fixed; only a top margin
+ * of a full inch or more would read as points again, so that one stays in points.
  *
  * @param {number} top - Top margin in points
  * @param {number} right - Right margin in points
  * @param {number} bottom - Bottom margin in points
  * @param {number} left - Left margin in points
- * @returns {[number, number, number, number]} Normalized margin array [top, right, bottom, left]
+ * @returns {[number, number, number, number]} [top, right, bottom, left] in inches (points if top >= 72 pt)
  */
 export function createTableCellMargin(top, right, bottom, left) {
-  return [top, right, bottom, left];
+  const points = [top, right, bottom, left];
+  return top >= 72 ? points : points.map((value) => value / 72);
 }
 
 export function getSoftEdges(filterStr, scale) {
