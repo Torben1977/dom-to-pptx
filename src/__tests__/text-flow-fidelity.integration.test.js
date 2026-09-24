@@ -39,7 +39,9 @@ const KNOWN_DEFECTS = {
   'native-bullets': [],
   // A negative text-indent travels as marL/indent with no marker. Faithful today.
   'hanging-indent': [],
-  'inline-lead': ['overlap'],
+  // The adapter materializes an inline `::before` as an inline span again, so it
+  // joins the paragraph's run instead of getting a text box of its own.
+  'inline-lead': [],
   'stacked-divs': [],
   // Row heights travel from the measured layout and the cell margins are the
   // CSS padding, nothing added. Faithful today.
