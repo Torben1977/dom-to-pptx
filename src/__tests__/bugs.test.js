@@ -98,7 +98,10 @@ describe('Bug 3: No duplicate rendering of inline elements', () => {
     const pmaCalls = mockAddText.mock.calls.filter((call) => {
       const [textParts] = call;
       if (Array.isArray(textParts)) {
-        const textStr = textParts.map(p => p.text).join('').trim();
+        const textStr = textParts
+          .map((p) => p.text)
+          .join('')
+          .trim();
         return textStr === 'PMA';
       }
       return false;

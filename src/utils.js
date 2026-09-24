@@ -839,7 +839,6 @@ export function createShapeMargin(top, right, bottom, left) {
 // first line of a bulleted paragraph left of the rest by one fixed distance.
 // That distance is not in the CSS — it follows from the marker glyph, the font
 // and the list type — so the only honest source is the browser itself.
-const markerHangCache = new Map();
 
 /**
  * Measures how far a list marker sits left of its item text, in CSS pixels.
@@ -850,11 +849,15 @@ const markerHangCache = new Map();
  * a hidden probe rather than on the live element, because switching the real
  * item would invalidate the rectangles the export is measuring.
  *
+ * The cache belongs to one export. Font faces are installed and removed around
+ * a render, so the same family name can resolve to a different font in the next
+ * one and a measurement kept across exports would be stale.
+ *
  * @returns {number} The distance in CSS pixels, or 0 when it cannot be
  *   measured — no layout engine, no marker, or a degenerate result. Callers
  *   treat 0 as "keep whatever you did before".
  */
-export function measureMarkerHangPx(listTag, itemStyle, markerStyle, startAt = 1) {
+export function measureMarkerHangPx(listTag, itemStyle, markerStyle, startAt = 1, cache = null) {
   const listStyleType = String(itemStyle?.listStyleType || 'disc');
   if (listStyleType === 'none') return 0;
   if (typeof document === 'undefined' || !document.body) return 0;
@@ -878,7 +881,7 @@ export function measureMarkerHangPx(listTag, itemStyle, markerStyle, startAt = 1
     markerFamily,
     startAt,
   ].join('|');
-  const cached = markerHangCache.get(key);
+  const cached = cache?.get(key);
   if (cached !== undefined) return cached;
 
   const host = document.createElement('div');
@@ -918,7 +921,7 @@ export function measureMarkerHangPx(listTag, itemStyle, markerStyle, startAt = 1
   }
 
   if (!Number.isFinite(hang) || hang <= 0) hang = 0;
-  markerHangCache.set(key, hang);
+  cache?.set(key, hang);
   return hang;
 }
 
@@ -952,10 +955,14 @@ export function resolveHangingIndentPt(node, style, scale) {
   const hangPx = hangingIndentPx(style);
   if (hangPx <= 0) return 0;
 
+  // One shape has one left inset. A block inside it that wants a different hang
+  // -- or any left padding of its own, which the inset cannot express either --
+  // would be laid out against the outer block's geometry.
   for (const el of node?.querySelectorAll?.('*') || []) {
     const childStyle = window.getComputedStyle(el);
     if (!isBlockFlowDisplay(childStyle.display)) continue;
     if (hangingIndentPx(childStyle) !== hangPx) return 0;
+    if ((parseFloat(childStyle.paddingLeft) || 0) > 0) return 0;
   }
 
   // The browser lets a first line spill out of the box to the left. PowerPoint
@@ -2265,8 +2272,18 @@ export function isBlockFlowDisplay(display) {
 export function isOutOfTextFlow(style) {
   if (!style) return false;
   if (String(style.float || 'none').toLowerCase() !== 'none') return true;
-  const transform = String(style.transform || 'none').toLowerCase();
-  if (transform !== 'none' && transform !== '') return true;
+  // A transform that resolves to the identity matrix paints the element exactly
+  // where the text flow put it. Treating it as out-of-flow cost a whole table
+  // its editable cells over a `translateZ(0)` painting hint.
+  const transform = String(style.transform || 'none')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  const isIdentityTransform =
+    transform === 'none' ||
+    transform === '' ||
+    transform === 'matrix(1,0,0,1,0,0)' ||
+    transform === 'matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)';
+  if (!isIdentityTransform) return true;
   const position = String(style.position || 'static').toLowerCase();
   return position === 'absolute' || position === 'fixed';
 }

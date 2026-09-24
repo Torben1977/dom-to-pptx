@@ -35,6 +35,17 @@ describe('isOutOfTextFlow', () => {
   it('treats transformed content as painted elsewhere', () => {
     expect(isOutOfTextFlow(style({ transform: 'translateX(10px)' }))).toBe(true);
     expect(isOutOfTextFlow(style({ transform: 'rotate(2deg)' }))).toBe(true);
+    expect(isOutOfTextFlow(style({ transform: 'matrix(1, 0, 0, 1, 12, 0)' }))).toBe(true);
+  });
+
+  // A painting hint such as `translateZ(0)` resolves to the identity matrix and
+  // moves nothing. Reading it as out-of-flow cost a whole table its editable
+  // cells, because content needing its own box inside a cell rasterizes the table.
+  it('keeps content with an identity transform in the text flow', () => {
+    expect(isOutOfTextFlow(style({ transform: 'matrix(1, 0, 0, 1, 0, 0)' }))).toBe(false);
+    expect(isOutOfTextFlow(style({ transform: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)' }))).toBe(
+      false
+    );
   });
 
   // `relative` and `sticky` stay in flow even when offset. Rejecting them would

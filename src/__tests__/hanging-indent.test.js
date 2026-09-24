@@ -57,6 +57,17 @@ describe('resolveHangingIndentPt', () => {
     expect(resolveHangingIndentPt(node, window.getComputedStyle(node), 1)).toBe(0);
   });
 
+  // One shape has one left inset, and a block with its own left padding would be
+  // laid out against the outer block's geometry.
+  it('steps back when a block inside the shape carries its own left padding', () => {
+    const node = mount(
+      '<div style="padding-left:28px;text-indent:-28px">' +
+        '<p style="text-indent:-28px">Erster Punkt</p>' +
+        '<p style="text-indent:-28px;padding-left:12px">Zweiter Punkt</p></div>'
+    );
+    expect(resolveHangingIndentPt(node, window.getComputedStyle(node), 1)).toBe(0);
+  });
+
   it('is not disturbed by inline content', () => {
     const node = mount(
       '<p style="padding-left:28px;text-indent:-28px">Erster <strong>Punkt</strong> mit <em>Auszeichnung</em></p>'

@@ -11,12 +11,18 @@ const emptySide = { width: 0, style: 'none', color: null, opacity: 0 };
 
 describe('elliptical composite border radii', () => {
   it('resolves percentage corner radii against the correct box axes', () => {
-    expect(resolveCssCornerRadii({
-      borderTopLeftRadius: '50%',
-      borderTopRightRadius: '25% 40%',
-      borderBottomRightRadius: '12px 18px',
-      borderBottomLeftRadius: '0px',
-    }, 420, 620)).toEqual({
+    expect(
+      resolveCssCornerRadii(
+        {
+          borderTopLeftRadius: '50%',
+          borderTopRightRadius: '25% 40%',
+          borderBottomRightRadius: '12px 18px',
+          borderBottomLeftRadius: '0px',
+        },
+        420,
+        620
+      )
+    ).toEqual({
       tl: { x: 210, y: 310 },
       tr: { x: 105, y: 248 },
       br: { x: 12, y: 18 },
@@ -31,12 +37,14 @@ describe('elliptical composite border radii', () => {
       br: { x: 210, y: 310 },
       bl: { x: 210, y: 310 },
     };
-    const svg = decodeSvg(generateCompositeBorderSVG(420, 620, radii, {
-      top: emptySide,
-      right: emptySide,
-      bottom: emptySide,
-      left: { width: 8, style: 'solid', color: '096E66', opacity: 1 },
-    }));
+    const svg = decodeSvg(
+      generateCompositeBorderSVG(420, 620, radii, {
+        top: emptySide,
+        right: emptySide,
+        bottom: emptySide,
+        left: { width: 8, style: 'solid', color: '096E66', opacity: 1 },
+      })
+    );
 
     expect(svg).toContain('stroke="#096E66"');
     expect(svg).toMatch(/A\s+206\s+306\s+0\s+0\s+0/);

@@ -59,9 +59,7 @@ describe('PPTXEmbedFonts.updatePresentationXML', () => {
     const embeddedFonts = Array.from(embeddedFontLst.getElementsByTagName('p:embeddedFont'));
     expect(embeddedFonts).toHaveLength(2);
 
-    const inter = embeddedFonts.find(
-      (n) => n.getElementsByTagName('p:font')[0].getAttribute('typeface') === 'Inter'
-    );
+    const inter = embeddedFonts.find((n) => n.getElementsByTagName('p:font')[0].getAttribute('typeface') === 'Inter');
     expect(inter).toBeTruthy();
     expect(inter.getElementsByTagName('p:regular')).toHaveLength(1);
     expect(inter.getElementsByTagName('p:bold')).toHaveLength(1);

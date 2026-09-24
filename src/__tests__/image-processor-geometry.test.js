@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  getProcessedImage,
-  normalizeImageCornerRadii,
-  resolveObjectPositionOffset,
-} from '../image-processor.js';
+import { getProcessedImage, normalizeImageCornerRadii, resolveObjectPositionOffset } from '../image-processor.js';
 
 describe('image processing geometry', () => {
   afterEach(() => {
@@ -12,13 +8,10 @@ describe('image processing geometry', () => {
   });
 
   it('resolves computed calc object-position without losing the pixel offset', () => {
-    expect(resolveObjectPositionOffset(
-      'calc(100% - 20px) calc(100% - 10px)',
-      200,
-      100,
-      400,
-      160
-    )).toEqual({ x: -220, y: -70 });
+    expect(resolveObjectPositionOffset('calc(100% - 20px) calc(100% - 10px)', 200, 100, 400, 160)).toEqual({
+      x: -220,
+      y: -70,
+    });
     expect(resolveObjectPositionOffset('25% 75%', 200, 100, 400, 160)).toEqual({ x: -50, y: -45 });
     expect(resolveObjectPositionOffset('top', 200, 100, 400, 160)).toEqual({ x: -100, y: 0 });
     expect(resolveObjectPositionOffset('right 20px bottom 10px', 200, 100, 400, 160)).toEqual({
@@ -28,12 +21,18 @@ describe('image processing geometry', () => {
   });
 
   it('keeps independent horizontal and vertical corner radii', () => {
-    expect(normalizeImageCornerRadii({
-      tl: { x: 100, y: 20 },
-      tr: { x: 50, y: 40 },
-      br: { x: 0, y: 0 },
-      bl: { x: 10, y: 30 },
-    }, 200, 100)).toEqual({
+    expect(
+      normalizeImageCornerRadii(
+        {
+          tl: { x: 100, y: 20 },
+          tr: { x: 50, y: 40 },
+          br: { x: 0, y: 0 },
+          bl: { x: 10, y: 30 },
+        },
+        200,
+        100
+      )
+    ).toEqual({
       tl: { x: 100, y: 20 },
       tr: { x: 50, y: 40 },
       br: { x: 0, y: 0 },
@@ -61,9 +60,9 @@ describe('image processing geometry', () => {
       toDataURL: () => 'data:image/png;base64,processed',
     };
     const originalCreateElement = document.createElement.bind(document);
-    vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => (
+    vi.spyOn(document, 'createElement').mockImplementation((tagName, options) =>
       tagName === 'canvas' ? canvas : originalCreateElement(tagName, options)
-    ));
+    );
     class FakeImage {
       width = 400;
       height = 160;

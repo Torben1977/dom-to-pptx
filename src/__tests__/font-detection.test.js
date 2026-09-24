@@ -76,9 +76,7 @@ describe('getFontsFromStyleSheets', () => {
     // relative to the stylesheet when rendering, but fetch() during embedding
     // resolves it against the document — so without href-based resolution the
     // font 404s and auto-embed silently falls back to a system font.
-    const sheet = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' }),
-    ]);
+    const sheet = makeSheet([fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' })]);
     sheet.href = 'https://example.com/assets/deck.css';
 
     const found = getFontsFromStyleSheets(new Set(['Inter']), [sheet]);
@@ -87,9 +85,7 @@ describe('getFontsFromStyleSheets', () => {
   });
 
   it('leaves relative src URLs untouched for hrefless (inline <style>) sheets', () => {
-    const sheet = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' }),
-    ]);
+    const sheet = makeSheet([fontFaceRule({ family: 'Inter', src: "url('fonts/Inter-Regular.ttf')", weight: '400' })]);
 
     const found = getFontsFromStyleSheets(new Set(['Inter']), [sheet]);
     expect(found).toHaveLength(1);
@@ -116,9 +112,7 @@ describe('getFontsFromStyleSheets', () => {
 
   it('recurses through multiple levels of @import', () => {
     // A imports B, B imports C, C declares the actual @font-face.
-    const level3 = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('a.ttf')", weight: '400' }),
-    ]);
+    const level3 = makeSheet([fontFaceRule({ family: 'Inter', src: "url('a.ttf')", weight: '400' })]);
     const level2 = makeSheet([importRule(level3)]);
     const level1 = makeSheet([importRule(level2)]);
 
@@ -132,10 +126,7 @@ describe('getFontsFromStyleSheets', () => {
     // imports sheet A back. Should terminate rather than stack-overflow.
     const a = makeSheet([]);
     const b = makeSheet([importRule(a)]);
-    a.cssRules = [
-      importRule(b),
-      fontFaceRule({ family: 'Inter', src: "url('cyclic.ttf')" }),
-    ];
+    a.cssRules = [importRule(b), fontFaceRule({ family: 'Inter', src: "url('cyclic.ttf')" })];
 
     const found = getFontsFromStyleSheets(new Set(['Inter']), [a]);
     expect(found).toHaveLength(1);
@@ -143,12 +134,8 @@ describe('getFontsFromStyleSheets', () => {
   });
 
   it('deduplicates by URL across multiple sheets', () => {
-    const sheetA = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('inter.ttf')", weight: '400' }),
-    ]);
-    const sheetB = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('inter.ttf')", weight: '400' }),
-    ]);
+    const sheetA = makeSheet([fontFaceRule({ family: 'Inter', src: "url('inter.ttf')", weight: '400' })]);
+    const sheetB = makeSheet([fontFaceRule({ family: 'Inter', src: "url('inter.ttf')", weight: '400' })]);
     const found = getFontsFromStyleSheets(new Set(['Inter']), [sheetA, sheetB]);
     expect(found).toHaveLength(1);
   });
@@ -176,13 +163,9 @@ describe('getFontsFromStyleSheets', () => {
         throw new Error('SecurityError: cross-origin');
       },
     };
-    const okSheet = makeSheet([
-      fontFaceRule({ family: 'Inter', src: "url('local.ttf')", weight: '400' }),
-    ]);
+    const okSheet = makeSheet([fontFaceRule({ family: 'Inter', src: "url('local.ttf')", weight: '400' })]);
 
-    expect(() =>
-      getFontsFromStyleSheets(new Set(['Inter']), [hostileSheet, okSheet])
-    ).not.toThrow();
+    expect(() => getFontsFromStyleSheets(new Set(['Inter']), [hostileSheet, okSheet])).not.toThrow();
     const found = getFontsFromStyleSheets(new Set(['Inter']), [hostileSheet, okSheet]);
     expect(found).toHaveLength(1);
     expect(found[0].url).toBe('local.ttf');
@@ -312,10 +295,7 @@ describe('parseImportUrlsFromCssText', () => {
       @import 'vendor.css';
     `;
     const urls = parseImportUrlsFromCssText(css, 'https://example.com/style.css');
-    expect(urls).toEqual([
-      'https://example.com/base.css',
-      'https://example.com/vendor.css',
-    ]);
+    expect(urls).toEqual(['https://example.com/base.css', 'https://example.com/vendor.css']);
   });
 
   it('deduplicates identical import targets', () => {

@@ -29,6 +29,10 @@ const html = `
         <p class="prose"><span class="mark">*</span>Ein Absatz, dessen Text neben dem Marker beginnt und darunter
         über die volle Breite weiterläuft, weil der Marker nur die erste Zeile verkürzt.</p>
       </section>
+      <section class="slide" id="nested-float-slide">
+        <p class="prose"><strong><span class="mark">*</span></strong><span>Derselbe Absatz, nur sitzt der Marker eine
+        Ebene tiefer und der Text in einem Span — beides verschiebt den Fluss genauso.</span></p>
+      </section>
       <section class="slide" id="table-marker-slide">
         <table><tbody><tr>
           <td class="flagged"><span class="badge">!</span>Zelle mit einem eigenen Marker</td>
@@ -37,6 +41,7 @@ const html = `
       </section>
       <section class="slide" id="mappable-slide">
         <div class="columns"><div class="column">Linke Spalte</div><div class="column">Rechte Spalte</div></div>
+        <table><tbody><tr><td><span style="transform:translateZ(0)">Malhinweis</span></td><td>offen</td></tr></tbody></table>
         <p class="flagged"><span class="badge">!</span>Ein Absatz, dessen Marker den Text nicht verschiebt.</p>
         <table><tbody><tr><td><strong>Zelle</strong> mit Auszeichnung</td><td>offen</td></tr></tbody></table>
       </section>
@@ -60,7 +65,7 @@ async function rasterizedObjects(selector) {
       onBoundaryFindings: (findings) => reported.push(...findings),
     },
   });
-  expect(buffer).toBeInstanceOf(Buffer);
+  expect(buffer?.length, 'the export produced a deck').toBeGreaterThan(0);
   return reported.map((finding) => [finding.type, finding.container, finding.descendant]);
 }
 
@@ -69,17 +74,24 @@ describe('text flow boundary policy', () => {
     expect(await rasterizedObjects('#float-slide')).toEqual([['float-in-text-flow', 'p.prose', 'span.mark']]);
   });
 
+  // A float displaces the inline text of the block it is laid out in, however
+  // deeply either of them is nested. Asking blocks for a floated child with
+  // direct text missed both halves of this — ordinary authored markup.
+  it('replaces the block even when the float and the text are nested', async () => {
+    expect(await rasterizedObjects('#nested-float-slide')).toEqual([['float-in-text-flow', 'p.prose', 'span.mark']]);
+  });
+
   it('replaces the whole table when a cell holds content that needs a box of its own', async () => {
-    expect(await rasterizedObjects('#table-marker-slide')).toEqual([
-      ['table-cell-needs-shape', 'table', 'span.badge'],
-    ]);
+    expect(await rasterizedObjects('#table-marker-slide')).toEqual([['table-cell-needs-shape', 'table', 'span.badge']]);
   });
 
   // Floats that only place blocks beside each other carry no text across the
   // float, and an absolutely positioned marker is painted beside the text
   // without moving it — both map to shapes of their own and must stay text. The
   // table carries inline markup in a cell, which a native cell holds perfectly
-  // well: only content that needs a box of its own is a finding.
+  // well: only content that needs a box of its own is a finding. The second
+  // table carries a painting hint that resolves to the identity matrix and moves
+  // nothing — reading that as out-of-flow cost a whole table its editable cells.
   it('leaves floats used as columns, an absolute marker and an ordinary table alone', async () => {
     expect(await rasterizedObjects('#mappable-slide')).toEqual([]);
   });

@@ -51,10 +51,12 @@ describe('simple native CSS multi-column text', () => {
         </div>
       </section>`;
 
-    await expect(exportHtmlToPptx(html, {
-      selector: '.slide',
-      pptxOptions: { width: 10, height: 5.625, autoEmbedFonts: false, boundaryPolicy: 'error' },
-    })).rejects.toThrow(/multi-column-fragmentation.*columns-slide.*fragmented-copy.*direct-text/s);
+    await expect(
+      exportHtmlToPptx(html, {
+        selector: '.slide',
+        pptxOptions: { width: 10, height: 5.625, autoEmbedFonts: false, boundaryPolicy: 'error' },
+      })
+    ).rejects.toThrow(/multi-column-fragmentation.*columns-slide.*fragmented-copy.*direct-text/s);
   }, 40_000);
 
   it('rasterizes only the fragmented multi-column subtree in fidelity mode', async () => {

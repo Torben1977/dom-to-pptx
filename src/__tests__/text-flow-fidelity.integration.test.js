@@ -68,10 +68,12 @@ const RASTERIZED = {
 };
 
 let outputDir;
+let boundaryFindings;
 let browserPages;
 let officePages;
 let slideXml;
 let findingsByProbe;
+let fixtureSlideIds;
 
 const normalize = (word) => word.toLocaleLowerCase('de');
 
@@ -155,8 +157,11 @@ async function measureBrowserPages(executablePath) {
         return { words, probes };
       })
     );
+    const slideIds = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.slide'), (slide) => slide.dataset.slideId ?? null)
+    );
     const toPt = (value) => value * PX_TO_PT;
-    return pages.map((page) => ({
+    const measured = pages.map((page) => ({
       words: page.words.map((word) => ({
         ...word,
         x: toPt(word.x),
@@ -174,6 +179,7 @@ async function measureBrowserPages(executablePath) {
         trailingSpace: toPt(probe.trailingSpace),
       })),
     }));
+    return { pages: measured, slideIds };
   } finally {
     await browser.close();
   }
@@ -379,8 +385,9 @@ officeDescribe('Office text flow fidelity against the browser layout', () => {
         `Puppeteer's browser is missing at ${executablePath}; run 'npx puppeteer browsers install chrome'.`
       );
     }
-    browserPages = await measureBrowserPages(executablePath);
+    ({ pages: browserPages, slideIds: fixtureSlideIds } = await measureBrowserPages(executablePath));
 
+    boundaryFindings = [];
     outputDir = mkdtempSync(path.join(tmpdir(), 'dom-to-pptx-text-flow-fidelity-'));
     const pptxPath = path.join(outputDir, 'text-flow-fidelity.pptx');
     const pdfPath = path.join(outputDir, 'text-flow-fidelity.pdf');
@@ -389,7 +396,13 @@ officeDescribe('Office text flow fidelity against the browser layout', () => {
       selector: '.slide',
       // The policy the controlled deck path is meant to run with: an object the
       // converter cannot map becomes a picture instead of failing the export.
-      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false, boundaryPolicy: 'rasterize' },
+      pptxOptions: {
+        width: 13.333333,
+        height: 7.5,
+        autoEmbedFonts: false,
+        boundaryPolicy: 'rasterize',
+        onBoundaryFindings: (findings) => boundaryFindings.push(...findings),
+      },
     });
     writeFileSync(pptxPath, buffer);
     const zip = await JSZip.loadAsync(buffer);
@@ -444,7 +457,7 @@ officeDescribe('Office text flow fidelity against the browser layout', () => {
     expect(kindsOf(probe), JSON.stringify(findingsByProbe.get(probe), null, 2)).toEqual(expected);
   });
 
-  it.each(Object.entries(RASTERIZED))('hands %s over as a picture covering its box (%s)', (probe) => {
+  it.each(Object.entries(RASTERIZED))('hands %s over as a picture covering its box (%s)', (probe, expectedType) => {
     const pageIndex = browserPages.findIndex((page) => page.probes.some((candidate) => candidate.name === probe));
     const box = browserPages[pageIndex].probes.find((candidate) => candidate.name === probe);
     const expectedWords = browserPages[pageIndex].words.filter((word) => word.probe === probe).map((word) => word.text);
@@ -492,5 +505,12 @@ officeDescribe('Office text flow fidelity against the browser layout', () => {
       covering,
       `no picture covers ${probe} at ${JSON.stringify(box)}; pictures: ${JSON.stringify(pictures)}`
     ).toBeDefined();
+
+    // And for the declared reason. A picture in the right place proves only that
+    // something replaced the object; if it was replaced for another reason, the
+    // detector this probe exists for is not the one that fired.
+    const slideId = fixtureSlideIds[pageIndex];
+    const reported = boundaryFindings.filter((finding) => finding.slideId === slideId).map((finding) => finding.type);
+    expect(reported, `${probe} on slide ${slideId} was replaced for another reason`).toEqual([expectedType]);
   });
 });

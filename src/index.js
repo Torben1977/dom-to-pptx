@@ -68,9 +68,10 @@ const PX_TO_INCH = 1 / PPI;
  *   rejects the export with structured findings; `rasterize` replaces the smallest affected
  *   subtree with a fidelity image; `ignore` preserves the historic best-effort mapper.
  * @param {(findings: Array<Object>) => void} [options.onBoundaryFindings] - Called once per slide
- *   with the findings whose subtree `rasterize` actually replaced, so the caller can report what
- *   stopped being editable text. Not called for `error`, which reports by rejecting, nor for
- *   findings that were analyzed but not replaced.
+ *   that has them, with the findings whose subtree `rasterize` actually replaced, so the caller
+ *   can report what stopped being editable text. Not called for `error`, which reports by
+ *   rejecting, nor for findings that were analyzed but not replaced. `exportHtmlToPptx` cannot
+ *   pass a callback into the page and therefore collects them and calls once for the whole deck.
  * @param {boolean} [options.skipNormalize=false] - If true, skips re-zipping with DEFLATE
  *   and stripping dangling [Content_Types].xml Overrides. Leave it false unless you are
  *   debugging the raw PptxGenJS output, otherwise Microsoft PowerPoint may reject the file.
@@ -532,6 +533,9 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     throw new Error(`DOM_TO_PPTX_UNSUPPORTED_BOUNDARY ${JSON.stringify(serializeBoundaryFindings(boundaryFindings))}`);
   }
   const boundaryRasterRoots = boundaryPolicy === 'rasterize' ? outermostBoundaryElements(boundaryFindings) : new Set();
+  // Measured marker widths live for one slide: the fonts around a render are
+  // installed and removed, so a value kept beyond it can describe another font.
+  const markerHangCache = new Map();
   // Rasterizing keeps the deck readable but costs editable text, so it must not
   // be silent: a caller that replaces `error` with `rasterize` needs to learn
   // what was replaced, or nobody downstream can say a word about it.
@@ -584,6 +588,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
           ...globalOptions,
           _pseudoContentByNode: pseudoContentByNode,
           _boundaryRasterRoots: boundaryRasterRoots,
+          _markerHangCache: markerHangCache,
           _inheritedOpacity: parentOpacity,
           _inheritedAnimation: inheritedAnimation,
         });
@@ -1182,6 +1187,41 @@ function analyzeMultiColumnBoundaries(root) {
 }
 
 /**
+ * The block a float is laid out in. A float is positioned against its nearest
+ * block container, and it is that block's inline content it displaces -- not
+ * the inline element it happens to sit inside.
+ */
+function nearestBlockContainer(node) {
+  let block = node;
+  while (block && !isBlockFlowDisplay(window.getComputedStyle(block).display)) {
+    block = block.parentElement;
+  }
+  return block;
+}
+
+/**
+ * Whether a block has inline text that a float in it would displace.
+ *
+ * Text inside a nested block belongs to that block and is displaced there, if
+ * at all. Text inside the float itself travels with the float. Everything else
+ * in the inline flow -- bare text nodes and text inside inline elements at any
+ * depth -- is what the float pushes aside.
+ */
+function hasDisplacedInlineText(block, float) {
+  for (const child of Array.from(block.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      if (child.nodeValue && child.nodeValue.trim()) return true;
+      continue;
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE || child === float) continue;
+    const style = window.getComputedStyle(child);
+    if (isVisuallySuppressed(child) || isOutOfTextFlow(style) || isBlockFlowDisplay(style.display)) continue;
+    if (hasDisplacedInlineText(child, float)) return true;
+  }
+  return false;
+}
+
+/**
  * Detect a float inside a text flow.
  *
  * A float is the one out-of-flow box that moves the rest of the text: the lines
@@ -1189,6 +1229,11 @@ function analyzeMultiColumnBoundaries(root) {
  * has one rectangle for all of its lines, so the two cannot both be right. The
  * converter gives the float a shape of its own and the text the block's full
  * rectangle, and the text then runs straight through the float.
+ *
+ * Asked of the float, not of the block: the float displaces the inline text of
+ * the block it is laid out in, however deeply either of them is nested. Asking
+ * blocks for a floated child missed `<p><span float><span>text</span></p>`,
+ * which is ordinary authored markup.
  *
  * Where the shortened region happens to be one rectangle for the whole text
  * object -- a float preceding a paragraph, tall enough to reach every line --
@@ -1202,26 +1247,29 @@ function analyzeMultiColumnBoundaries(root) {
  */
 function analyzeFloatTextFlowBoundaries(root) {
   const findings = [];
-  for (const container of Array.from(root.querySelectorAll('*'))) {
-    if (!hasVisibleDirectText(container)) continue;
+  const reported = new Set();
 
-    const floated = Array.from(container.children).find((child) => {
-      const style = window.getComputedStyle(child);
-      if (!['left', 'right'].includes(String(style.float || 'none'))) return false;
-      if (isVisuallySuppressed(child)) return false;
-      const rect = child.getBoundingClientRect();
-      return rect.width > 0.5 && rect.height > 0.5;
-    });
-    if (!floated) continue;
+  for (const floated of Array.from(root.querySelectorAll('*'))) {
+    const style = window.getComputedStyle(floated);
+    if (!['left', 'right'].includes(String(style.float || 'none'))) continue;
+    if (isVisuallySuppressed(floated)) continue;
+    const rect = floated.getBoundingClientRect();
+    if (rect.width <= 0.5 || rect.height <= 0.5) continue;
 
+    const block = nearestBlockContainer(floated.parentElement);
+    // The slide itself is never replaced: it is the canvas, not an object on it.
+    if (!block || block === root || !root.contains(block) || reported.has(block)) continue;
+    if (!hasDisplacedInlineText(block, floated)) continue;
+
+    reported.add(block);
     findings.push({
       type: 'float-in-text-flow',
       slideId: root.dataset?.slideId || null,
-      semanticId: container.dataset?.semanticId || floated.dataset?.semanticId || null,
-      container: getNodeSelector(container),
+      semanticId: block.dataset?.semanticId || floated.dataset?.semanticId || null,
+      container: getNodeSelector(block),
       descendant: getNodeSelector(floated),
-      reason: String(window.getComputedStyle(floated).float),
-      element: container,
+      reason: String(style.float),
+      element: block,
     });
   }
   return findings;
@@ -1261,7 +1309,10 @@ function analyzeTableCellShapeBoundaries(root) {
     findings.push({
       type: 'table-cell-needs-shape',
       slideId: root.dataset?.slideId || null,
-      semanticId: offendingNode.dataset?.semanticId || offendingCell.dataset?.semanticId || null,
+      // The replaced object comes first, as it does for a float: the report
+      // calls this field the object, and the table is what is replaced.
+      semanticId:
+        table.dataset?.semanticId || offendingCell.dataset?.semanticId || offendingNode.dataset?.semanticId || null,
       container: getNodeSelector(table),
       descendant: getNodeSelector(offendingNode),
       reason: String(window.getComputedStyle(offendingNode).position || 'static'),
@@ -2317,8 +2368,15 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     };
     const job = async () => {
       const pngData = await elementToCanvasImage(node, widthPx, heightPx, { preserveOverflow: true });
-      if (pngData) item.options.data = pngData;
-      else item.skip = true;
+      // Skipping here would drop the object without a trace: the queue filters
+      // images without data, and `stopRecursion` means its text was never
+      // collected either. A deck that quietly loses an object is worse than an
+      // export that stops, and unlike a float in a text flow this is a
+      // malfunction, not a property of PowerPoint.
+      if (!pngData) {
+        throw new Error(`DOM_TO_PPTX_RASTERIZE_FAILED ${getNodeSelector(node)}`);
+      }
+      item.options.data = pngData;
     };
     return { items: [item], job, stopRecursion: true };
   }
@@ -2440,7 +2498,8 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           nodeTag,
           window.getComputedStyle(liChildren[0]),
           window.getComputedStyle(liChildren[0], '::marker'),
-          widestOrdinal
+          widestOrdinal,
+          globalOptions._markerHangCache
         )
       : 0;
     const textBaseLeftPx = itemTextLeftPx.length ? Math.min(...itemTextLeftPx) : ulPaddingLeft;

@@ -94,9 +94,7 @@ describe('flow text groups', () => {
 
     const parts = collectTextParts(container, window.getComputedStyle(container), 1);
     expect(parts.map((part) => part.text).join('')).toContain('Nur das Zusammenspiel schafft Wirkung.');
-    expect(parts.map((part) => part.text).join('')).toContain(
-      'Ziel, Mittel und Verantwortung greifen ineinander.'
-    );
+    expect(parts.map((part) => part.text).join('')).toContain('Ziel, Mittel und Verantwortung greifen ineinander.');
     const secondRun = parts.findIndex((part) => part.text.includes('Ziel, Mittel'));
     expect(parts.slice(0, secondRun).some((part) => part.options?.breakLine)).toBe(true);
   });
