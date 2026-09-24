@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Boundary finding `float-in-text-flow`: a float shortens the lines beside it and leaves the ones below it full width, which one PowerPoint text rectangle cannot express. Raised for a float inside a text-bearing block. A float that only places blocks beside each other carries no text across the float and is not a finding; neither is an absolutely positioned box, which is painted beside the text without moving it.
+- Boundary finding `table-cell-needs-shape`: a native PowerPoint table cell holds text and nothing else, so out-of-flow content in a cell has nowhere to go — it either joins the run, which glues it to the first word, or opens a paragraph, which pushes the cell's text down. Raised against the table, because the cell cannot be replaced on its own.
+- The fidelity oracle declares rasterization as a result of its own: for a probe listed in `RASTERIZED` it asserts that nothing is left in the text layer where the object sits and that a picture covers its box. Without that distinction a rasterized object and two lost words both read as `missing-word`, so the oracle could not tell a fix from a cop-out. It exports with `boundaryPolicy: 'rasterize'` now, the policy the controlled deck path is meant to run with.
 - `measureMarkerHangPx` in `src/utils.js`: measures how far a list marker sits left of its item text by laying the same item out with `list-style-position: inside` in a hidden probe, because that distance follows from the glyph, the font and the list type rather than from the declared CSS. Returns 0 where nothing can be measured, which callers read as "keep the previous behaviour".
 - Office text flow fidelity oracle: measures every word in Chromium and in the LibreOffice render of the exported PPTX, then reports per probe what a reader would see — lost words, overflow, overlap, line starts, stranded markers, vertical drift, collisions between objects, and paragraph edge spacing read from the PPTX XML. Its fixture is OrgLith adapter output, so the converter is tested at the boundary where the defects appear.
 
@@ -18,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- A caller running `boundaryPolicy: 'error'` now rejects a deck that has a float inside a text flow or out-of-flow content inside a table cell. That is what the findings are for, but both patterns are ordinary in authored decks, so a deck pipeline has to run `boundaryPolicy: 'rasterize'` — otherwise the export fails where it could have handed one object over as a picture.
 - Merge upstream v2.1.2: hierarchical `indentLevel` for indented sub-bullets, margin normalization helpers, recursive `@import` font detection, and badge shape preservation. Measured against the fidelity probes, none of the fork's known defects change: upstream's list fix applies only where a list item carries extra indent, while a plain list keeps the fixed 20 pt bullet gap.
 
 ## [2.1.2] - 2026-09-14

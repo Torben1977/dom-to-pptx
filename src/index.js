@@ -12,6 +12,7 @@ import {
   parseColor,
   getTextStyle,
   isOutOfTextFlow,
+  isVisuallySuppressed,
   isTextContainer,
   isTextContainerCached,
   createShapeMargin,
@@ -1167,8 +1168,103 @@ function analyzeMultiColumnBoundaries(root) {
   return findings;
 }
 
+/**
+ * Detect a float inside a text flow.
+ *
+ * A float is the one out-of-flow box that moves the rest of the text: the lines
+ * beside it are shortened, the lines below it are not. A PowerPoint text frame
+ * has one rectangle for all of its lines, so the two cannot both be right. The
+ * converter gives the float a shape of its own and the text the block's full
+ * rectangle, and the text then runs straight through the float.
+ *
+ * Where the shortened region happens to be one rectangle for the whole text
+ * object -- a float preceding a paragraph, tall enough to reach every line --
+ * `getSiblingFloatTextRect` maps it and no finding is raised. What cannot be
+ * mapped is a float that shortens only part of the text, which is what a float
+ * inside a text-bearing block always does.
+ *
+ * An absolutely positioned box is deliberately not a finding here: it is
+ * painted beside the text without displacing it, so a shape of its own is a
+ * faithful mapping (see the `marker-list` probe of the fidelity oracle).
+ */
+function analyzeFloatTextFlowBoundaries(root) {
+  const findings = [];
+  for (const container of Array.from(root.querySelectorAll('*'))) {
+    if (!hasVisibleDirectText(container)) continue;
+
+    const floated = Array.from(container.children).find((child) => {
+      const style = window.getComputedStyle(child);
+      if (!['left', 'right'].includes(String(style.float || 'none'))) return false;
+      if (isVisuallySuppressed(child)) return false;
+      const rect = child.getBoundingClientRect();
+      return rect.width > 0.5 && rect.height > 0.5;
+    });
+    if (!floated) continue;
+
+    findings.push({
+      type: 'float-in-text-flow',
+      slideId: root.dataset?.slideId || null,
+      semanticId: container.dataset?.semanticId || floated.dataset?.semanticId || null,
+      container: getNodeSelector(container),
+      descendant: getNodeSelector(floated),
+      reason: String(window.getComputedStyle(floated).float),
+      element: container,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Detect content in a table cell that needs a shape of its own.
+ *
+ * A native PowerPoint table cell holds text and nothing else -- no second
+ * shape can be placed inside it. The converter therefore flattens a cell into
+ * its text, and out-of-flow content in that cell has nowhere to go: it either
+ * joins the run, which glues it to the first word, or opens a paragraph, which
+ * pushes the cell's text down. Since the cell cannot be replaced on its own,
+ * the table is the smallest object that can be rasterized.
+ */
+function analyzeTableCellShapeBoundaries(root) {
+  const findings = [];
+  for (const table of Array.from(root.querySelectorAll('table'))) {
+    let offendingCell = null;
+    let offendingNode = null;
+
+    for (const cell of Array.from(table.querySelectorAll('th, td'))) {
+      const candidate = Array.from(cell.querySelectorAll('*')).find((descendant) => {
+        if (isVisuallySuppressed(descendant)) return false;
+        if (!isOutOfTextFlow(window.getComputedStyle(descendant))) return false;
+        const rect = descendant.getBoundingClientRect();
+        return rect.width > 0.5 && rect.height > 0.5;
+      });
+      if (candidate) {
+        offendingCell = cell;
+        offendingNode = candidate;
+        break;
+      }
+    }
+    if (!offendingNode) continue;
+
+    findings.push({
+      type: 'table-cell-needs-shape',
+      slideId: root.dataset?.slideId || null,
+      semanticId: offendingNode.dataset?.semanticId || offendingCell.dataset?.semanticId || null,
+      container: getNodeSelector(table),
+      descendant: getNodeSelector(offendingNode),
+      reason: String(window.getComputedStyle(offendingNode).position || 'static'),
+      element: table,
+    });
+  }
+  return findings;
+}
+
 function analyzeUnsupportedBoundaries(root) {
-  return [...analyzeOverflowClippingBoundaries(root), ...analyzeMultiColumnBoundaries(root)];
+  return [
+    ...analyzeOverflowClippingBoundaries(root),
+    ...analyzeMultiColumnBoundaries(root),
+    ...analyzeFloatTextFlowBoundaries(root),
+    ...analyzeTableCellShapeBoundaries(root),
+  ];
 }
 
 function serializeBoundaryFindings(findings) {
