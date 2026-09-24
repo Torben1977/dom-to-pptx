@@ -649,6 +649,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
         y: item.options.y,
         w: item.options.w,
         colW: item.tableData.colWidths, // Essential for correct layout
+        ...(item.tableData.rowHeights?.some((height) => height > 0) && { rowH: item.tableData.rowHeights }),
         autoPage: false,
         // Remove default table styles so our extracted CSS applies cleanly
         border: { type: 'none' },

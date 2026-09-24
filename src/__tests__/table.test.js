@@ -58,6 +58,63 @@ describe('extractTableData', () => {
     document.body.removeChild(table);
   });
 
+  // `border-spacing` has no effect once the borders are collapsed, but the
+  // browser keeps reporting its value. Adding it anyway gave every collapsed
+  // table cell margins wider than its CSS padding, so its cells wrapped earlier
+  // than in the browser — which pushed the rows below down and cost words.
+  it('keeps a collapsed table cell margin at its CSS padding', () => {
+    const table = document.createElement('table');
+    table.setAttribute('style', 'border-collapse:collapse;border-spacing:2px');
+    table.innerHTML = '<tr><td style="padding:8px 10px">Dimension</td></tr>';
+    document.body.appendChild(table);
+
+    try {
+      // PptxGenJS takes cell margins as [top, right, bottom, left] in points.
+      const margin = extractTableData(table, 1).rows[0][0].options.margin;
+      expect(margin.map((value) => Number(value.toFixed(4)))).toEqual([6, 7.5, 6, 7.5]);
+    } finally {
+      table.remove();
+    }
+  });
+
+  it('adds border-spacing to the cell margin only where the browser applies it', () => {
+    const table = document.createElement('table');
+    table.setAttribute('style', 'border-collapse:separate;border-spacing:2px');
+    table.innerHTML = '<tr><td style="padding:8px 10px">Dimension</td></tr>';
+    document.body.appendChild(table);
+
+    try {
+      // Half of the 2px gap belongs to each of the two cells that share it.
+      const margin = extractTableData(table, 1).rows[0][0].options.margin;
+      expect(margin.map((value) => Number(value.toFixed(4)))).toEqual([6.75, 8.25, 6.75, 8.25]);
+    } finally {
+      table.remove();
+    }
+  });
+
+  // The measured height travels as a row minimum. It is not what fixed the
+  // table probe — the cell margins were — and the fidelity fixture has no row
+  // the browser makes taller than its text, so this guards the transmission
+  // only, not the rendering.
+  it('carries the measured row height alongside the rows it belongs to', () => {
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><td>Kopf</td></tr><tr></tr><tr><td>Zeile</td></tr>';
+    document.body.appendChild(table);
+    const rows = Array.from(table.querySelectorAll('tr'));
+    rows[0].getBoundingClientRect = () => ({ height: 48, width: 200, top: 0, left: 0, right: 200, bottom: 48 });
+    rows[1].getBoundingClientRect = () => ({ height: 999, width: 200, top: 48, left: 0, right: 200, bottom: 1047 });
+    rows[2].getBoundingClientRect = () => ({ height: 96, width: 200, top: 48, left: 0, right: 200, bottom: 144 });
+
+    try {
+      const data = extractTableData(table, 1);
+      // The empty row never becomes a row, so its height must not become one either.
+      expect(data.rows).toHaveLength(2);
+      expect(data.rowHeights).toEqual([48 / 96, 96 / 96]);
+    } finally {
+      table.remove();
+    }
+  });
+
   it('maps writing-mode to textDirection in table cells', () => {
     const table = document.createElement('table');
     table.innerHTML = `

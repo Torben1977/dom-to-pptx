@@ -41,7 +41,9 @@ const KNOWN_DEFECTS = {
   'hanging-indent': [],
   'inline-lead': ['overlap'],
   'stacked-divs': [],
-  'table-cells': ['drift', 'missing-word', 'overflow'],
+  // Row heights travel from the measured layout and the cell margins are the
+  // CSS padding, nothing added. Faithful today.
+  'table-cells': [],
   'table-below': [],
   // A span shifted with `position: relative` stays in the run on purpose: the
   // alternative is one box per fragment, which overlaps. Faithful today.

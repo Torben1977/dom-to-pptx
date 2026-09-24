@@ -178,11 +178,23 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
   }
 
   const tableStyle = window.getComputedStyle(node);
+  // `border-spacing` has no effect once the borders are collapsed, but the
+  // browser still reports its value -- 2px by default. Adding it anyway gave
+  // every collapsed table, which is nearly every table, cell margins wider than
+  // its CSS padding, so its cells wrapped earlier than in the browser.
+  const collapsed = String(tableStyle.borderCollapse || '').toLowerCase() === 'collapse';
   const borderSpacing = tableStyle.borderSpacing.split(' ');
-  const hSpace = parseFloat(borderSpacing[0]) || 0;
-  const vSpace = parseFloat(borderSpacing[1] || borderSpacing[0]) || 0;
+  const hSpace = collapsed ? 0 : parseFloat(borderSpacing[0]) || 0;
+  const vSpace = collapsed ? 0 : parseFloat(borderSpacing[1] || borderSpacing[0]) || 0;
   const hSpacePt = hSpace * 0.75 * scale;
   const vSpacePt = vSpace * 0.75 * scale;
+
+  // Row heights the browser laid out. PowerPoint treats them as a minimum and
+  // grows a row whose content needs more, so this cannot force text out of
+  // sight; without them it derives every height itself and everything below the
+  // first row that differs sits at the wrong place. Collected next to the rows
+  // themselves, because a row without cells never becomes one.
+  const rowHeights = [];
 
   // 2. Iterate Rows
   trList.forEach((tr) => {
@@ -266,10 +278,12 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
 
     if (rowData.length > 0) {
       rows.push(rowData);
+      const height = tr.getBoundingClientRect().height;
+      rowHeights.push(Number.isFinite(height) && height > 0 ? height * (1 / 96) * scale : 0);
     }
   });
 
-  return { rows, colWidths };
+  return { rows, colWidths, rowHeights };
 }
 
 // Checks if any parent element has overflow: hidden which would clip this element
