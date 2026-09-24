@@ -16,6 +16,9 @@ dist/
 # Git internal (usually not needed, but kept as requested)
 .git/
 
+# Release artefacts from `npm pack` — uploaded to the GitHub release, never committed
+*.tgz
+
 # Project-specific files & folders
 test-playground/
 demo/
