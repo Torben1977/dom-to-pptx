@@ -11,6 +11,7 @@ const PptxGenJS = PptxGenJSImport?.default ?? PptxGenJSImport;
 import {
   parseColor,
   getTextStyle,
+  isBlockFlowDisplay,
   isOutOfTextFlow,
   isVisuallySuppressed,
   isTextContainer,
@@ -1756,6 +1757,30 @@ function clampAnonymousTextGeometry(node, rect, width, height) {
   };
 }
 
+/**
+ * The width a wrapped anonymous text fragment was laid out in.
+ *
+ * `range.getBoundingClientRect()` reports the union of the painted glyphs, which
+ * for wrapped text is the longest line -- not the width the browser broke it in.
+ * Giving Office the narrower box makes it break earlier, and every line it adds
+ * pushes the rest of the block down. The fragment was broken inside the content
+ * box of its block, so that is the width, measured from the fragment's own left
+ * edge. In-flow content beside the text would shorten it, but a float there is a
+ * boundary finding of its own and out-of-flow content takes no space.
+ */
+function anonymousFragmentLineWidth(node, rect) {
+  let block = node?.parentElement || null;
+  while (block && !isBlockFlowDisplay(window.getComputedStyle(block).display)) {
+    block = block.parentElement;
+  }
+  if (!block) return 0;
+  const blockStyle = window.getComputedStyle(block);
+  const blockRect = block.getBoundingClientRect();
+  const contentRight =
+    blockRect.right - (parseFloat(blockStyle.borderRightWidth) || 0) - (parseFloat(blockStyle.paddingRight) || 0);
+  return contentRight - rect.left;
+}
+
 function isBlockFlowBoundary(node) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
   if ((node.tagName || '').toLowerCase() === 'br') return true;
@@ -2136,7 +2161,12 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const style = window.getComputedStyle(parent);
     const renderedSingleLine = isRenderedSingleLine(node);
     const lineHeightPx = parseFloat(style.lineHeight) || rect.height;
-    const tolerantWidthPx = renderedSingleLine ? rect.width + TEXT_GEOMETRY_TOLERANCE_PX : rect.width;
+    // A one-line fragment keeps its exact box on purpose: widening it would let
+    // Office make a second wrapping decision. A wrapped one is meant to wrap, so
+    // it needs the width the browser wrapped it in.
+    const tolerantWidthPx = renderedSingleLine
+      ? rect.width + TEXT_GEOMETRY_TOLERANCE_PX
+      : Math.max(rect.width, anonymousFragmentLineWidth(node, rect));
     const tolerantHeightPx = renderedSingleLine
       ? Math.max(rect.height, lineHeightPx) + TEXT_GEOMETRY_TOLERANCE_PX
       : rect.height;

@@ -28,11 +28,9 @@ const EMU_PER_PT = 12700;
 // A converter fix removes its kind here; a regression adds one. Keep the kinds,
 // not the measured numbers: numbers vary with fonts and browser builds.
 const KNOWN_DEFECTS = {
-  // The markers sit beside their text. What remains is the last item wrapping
-  // onto a third line in Office because its text box got the width of its
-  // content instead of the width available to it, which strands that item's
-  // marker and pushes the list past its box.
-  'marker-list': ['overflow', 'stranded'],
+  // The markers sit beside their text, and the wrapped items get the width the
+  // browser wrapped them in. This is the pattern that broke in production.
+  'marker-list': [],
   'break-list': [],
   // The marker width comes out of the list's left inset, as it does out of the
   // left padding in the browser, so the text starts at the content edge.

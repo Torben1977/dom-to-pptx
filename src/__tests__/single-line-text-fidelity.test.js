@@ -20,6 +20,61 @@ function cssPxToEmu(px) {
   return Math.round((px / 144) * 914_400);
 }
 
+// A wrapped fragment has to keep the width the browser wrapped it in; a
+// one-line fragment has to keep its exact box. The same measurement decides
+// both, so they are checked against each other.
+describe('anonymous text fragment width', () => {
+  const EMU_PER_PX = (13.333333 * 914_400) / 1280;
+
+  it('gives a wrapped fragment the width of its block and leaves a one-line fragment exact', async () => {
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; }
+          .slide { position: relative; width: 1280px; height: 720px; overflow: hidden; background: white; }
+          .card { position: absolute; left: 64px; top: 64px; width: 600px; padding: 24px 32px; background: #eef2ff; }
+          .item { position: relative; padding-left: 28px; margin: 0 0 14px; font: 17pt/25pt Arial, sans-serif; }
+          .item .mark { position: absolute; left: 0; top: 0; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <section class="slide">
+          <div class="card">
+            <p class="item"><span class="mark">*</span>Ein Punkt mit so viel Text, dass der Browser ihn auf mehrere Zeilen umbricht und die Breite damit sichtbar wird.</p>
+            <p class="item"><span class="mark">*</span>Kurzer Punkt</p>
+          </div>
+        </section>
+      </body>
+      </html>
+    `;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+
+    // The card is 600px wide with 32px of padding, so its content ends at 632px.
+    const contentRightEmu = 632 * EMU_PER_PX;
+    const shapeContaining = (needle) => {
+      const textIndex = xml.indexOf(needle);
+      expect(textIndex, `text containing '${needle}'`).toBeGreaterThan(-1);
+      return shapeGeometry(xml.slice(xml.lastIndexOf('<p:sp>', textIndex), xml.indexOf('</p:sp>', textIndex)));
+    };
+    const wrapped = shapeContaining('Ein Punkt mit so viel Text');
+    const single = shapeContaining('Kurzer Punkt');
+
+    expect(wrapped.right).toBeGreaterThan(contentRightEmu - 2 * EMU_PER_PX);
+    expect(wrapped.right).toBeLessThan(contentRightEmu + 2 * EMU_PER_PX);
+    // The short one keeps the box its glyphs need, well inside the same block.
+    expect(single.right).toBeLessThan(contentRightEmu - 50 * EMU_PER_PX);
+  });
+});
+
 describe('browser single-line fidelity', () => {
   it('preserves explicit single-line rows inside an intrinsic-width text container', async () => {
     const html = `
