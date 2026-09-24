@@ -46,20 +46,33 @@ const html = `
 
 const pptxOptions = { width: 10, height: 5.625, autoEmbedFonts: false };
 
-const exportSlide = (selector, boundaryPolicy) =>
-  exportHtmlToPptx(html, { selector, pptxOptions: { ...pptxOptions, boundaryPolicy } });
+// One browser launch per export, so every case asks its slide once and checks
+// both halves at once: what the converter refuses to map, and what it tells the
+// caller about it. Rasterizing keeps the deck readable but costs editable text,
+// so a silent replacement would be as bad as a broken one.
+async function rasterizedObjects(selector) {
+  const reported = [];
+  const buffer = await exportHtmlToPptx(html, {
+    selector,
+    pptxOptions: {
+      ...pptxOptions,
+      boundaryPolicy: 'rasterize',
+      onBoundaryFindings: (findings) => reported.push(...findings),
+    },
+  });
+  expect(buffer).toBeInstanceOf(Buffer);
+  return reported.map((finding) => [finding.type, finding.container, finding.descendant]);
+}
 
 describe('text flow boundary policy', () => {
-  it('reports a float inside a text flow, naming the block and the float', async () => {
-    await expect(exportSlide('#float-slide', 'error')).rejects.toThrow(
-      /DOM_TO_PPTX_UNSUPPORTED_BOUNDARY.*float-in-text-flow.*p\.prose.*span\.mark/s
-    );
+  it('replaces the block around a float inside a text flow', async () => {
+    expect(await rasterizedObjects('#float-slide')).toEqual([['float-in-text-flow', 'p.prose', 'span.mark']]);
   });
 
-  it('reports out-of-flow content in a table cell against the table, which is what can be replaced', async () => {
-    await expect(exportSlide('#table-marker-slide', 'error')).rejects.toThrow(
-      /DOM_TO_PPTX_UNSUPPORTED_BOUNDARY.*table-cell-needs-shape.*table.*span\.badge/s
-    );
+  it('replaces the whole table when a cell holds content that needs a box of its own', async () => {
+    expect(await rasterizedObjects('#table-marker-slide')).toEqual([
+      ['table-cell-needs-shape', 'table', 'span.badge'],
+    ]);
   });
 
   // Floats that only place blocks beside each other carry no text across the
@@ -68,6 +81,6 @@ describe('text flow boundary policy', () => {
   // table carries inline markup in a cell, which a native cell holds perfectly
   // well: only content that needs a box of its own is a finding.
   it('leaves floats used as columns, an absolute marker and an ordinary table alone', async () => {
-    await expect(exportSlide('#mappable-slide', 'error')).resolves.toBeInstanceOf(Buffer);
+    expect(await rasterizedObjects('#mappable-slide')).toEqual([]);
   });
 });

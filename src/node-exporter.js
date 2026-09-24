@@ -32,7 +32,6 @@ export function getLaunchArgs(product) {
   return ['--no-sandbox', '--disable-setuid-sandbox', '--allow-file-access-from-files'];
 }
 
-
 // ─── Platform-aware browser search map ───────────────────────────────────────
 // Each entry is { name, product, paths[] }.
 // `product` is 'chrome' or 'firefox' — controls puppeteer launch args.
@@ -292,9 +291,13 @@ export async function exportHtmlToPptx(htmlSource, options = {}) {
     const selector = options.selector || '.slide';
     console.log(`Running programmatic extraction for slide elements matching: ${selector}`);
 
-    let dataUrl;
+    // A callback cannot cross into the page context, so `onBoundaryFindings` is
+    // installed on the page side and its findings are carried back out.
+    const { onBoundaryFindings, ...pageOptions } = options.pptxOptions || {};
+
+    let result;
     try {
-      dataUrl = await page.evaluate(
+      result = await page.evaluate(
         async (sel, pptxOpts) => {
           if (!window.domToPptx || !window.domToPptx.exportToPptx) {
             throw new Error('dom-to-pptx library not found on the page context.');
@@ -305,24 +308,32 @@ export async function exportHtmlToPptx(htmlSource, options = {}) {
             throw new Error(`No elements matching slide selector "${sel}" found.`);
           }
 
+          const boundaryFindings = [];
           const blob = await window.domToPptx.exportToPptx(targets, {
             ...pptxOpts,
+            onBoundaryFindings: (findings) => boundaryFindings.push(...findings),
             skipDownload: true,
           });
 
-          return new Promise((resolve, reject) => {
+          const dataUrl = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => resolve(reader.result);
             reader.onerror = reject;
             reader.readAsDataURL(blob);
           });
+          return { dataUrl, boundaryFindings };
         },
         selector,
-        options.pptxOptions || {}
+        pageOptions
       );
     } catch (err) {
       throw new Error(`Programmatic export failed: ${err.message}`);
     }
+
+    if (typeof onBoundaryFindings === 'function' && result.boundaryFindings.length > 0) {
+      onBoundaryFindings(result.boundaryFindings);
+    }
+    const dataUrl = result.dataUrl;
 
     const base64Data = dataUrl.split(',')[1];
     return Buffer.from(base64Data, 'base64');

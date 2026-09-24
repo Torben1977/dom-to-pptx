@@ -66,6 +66,10 @@ const PX_TO_INCH = 1 / PPI;
  *   constructs that cannot be represented faithfully as editable PowerPoint objects. `error`
  *   rejects the export with structured findings; `rasterize` replaces the smallest affected
  *   subtree with a fidelity image; `ignore` preserves the historic best-effort mapper.
+ * @param {(findings: Array<Object>) => void} [options.onBoundaryFindings] - Called once per slide
+ *   with the findings whose subtree `rasterize` actually replaced, so the caller can report what
+ *   stopped being editable text. Not called for `error`, which reports by rejecting, nor for
+ *   findings that were analyzed but not replaced.
  * @param {boolean} [options.skipNormalize=false] - If true, skips re-zipping with DEFLATE
  *   and stripping dangling [Content_Types].xml Overrides. Leave it false unless you are
  *   debugging the raw PptxGenJS output, otherwise Microsoft PowerPoint may reject the file.
@@ -527,6 +531,13 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     throw new Error(`DOM_TO_PPTX_UNSUPPORTED_BOUNDARY ${JSON.stringify(serializeBoundaryFindings(boundaryFindings))}`);
   }
   const boundaryRasterRoots = boundaryPolicy === 'rasterize' ? outermostBoundaryElements(boundaryFindings) : new Set();
+  // Rasterizing keeps the deck readable but costs editable text, so it must not
+  // be silent: a caller that replaces `error` with `rasterize` needs to learn
+  // what was replaced, or nobody downstream can say a word about it.
+  if (boundaryRasterRoots.size > 0 && typeof globalOptions.onBoundaryFindings === 'function') {
+    const rasterized = boundaryFindings.filter((finding) => boundaryRasterRoots.has(finding.element));
+    globalOptions.onBoundaryFindings(serializeBoundaryFindings(rasterized));
+  }
 
   // Sync Traversal Function
   function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null) {
