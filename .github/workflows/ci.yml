@@ -1,0 +1,57 @@
+# Nothing ran this fork's tests automatically until now: a change could undo a
+# measured fix and only a human running `pnpm test` would have noticed.
+#
+# The LibreOffice measurement is deliberately not here. The fidelity oracle is
+# calibrated against one machine's Chromium and LibreOffice, and it has never
+# run on Linux — a different line break there would show up as a defect that
+# does not exist, and a red check that means nothing is worse than no check.
+# It runs on demand instead, from org-graph: `make test-presentation-fidelity
+# DOM_TO_PPTX_CHECKOUT=…`.
+#
+# What runs here is the part that is platform-independent: the unit suite checks
+# predicates and emitted OpenXML, not pixel metrics, and it covers every
+# mechanism behind the slide that broke in production.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # A few tests measure text in a real browser. The fixtures ask for Arial,
+      # which Linux does not have; Liberation Sans is metric-compatible and is
+      # what fontconfig picks when it is present, so the substitution is at
+      # least deterministic.
+      - name: Install metric-compatible fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-liberation
+
+      - run: pnpm install --frozen-lockfile
+
+      # pnpm skips Puppeteer's own browser download, and every test that
+      # measures layout needs a real one.
+      - name: Install the pinned browser
+        run: npx puppeteer browsers install chrome
+
+      - run: pnpm run lint
+
+      # The office-roundtrip suites self-skip without DOM_TO_PPTX_OFFICE_ROUNDTRIP.
+      - name: Unit tests
+        run: pnpm test
