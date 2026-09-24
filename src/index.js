@@ -1977,7 +1977,12 @@ function getSiblingFloatTextRect(node, style) {
  * has no anonymous line box, so use the parent's content width for that one
  * editable text shape. Painted/padded inline boxes retain their own geometry.
  */
+// Replaced elements carry their own size; widening them to the line would stretch
+// the picture (an inline <svg> alone in its block came out at the block's width).
+const REPLACED_INLINE_TAGS = new Set(['img', 'svg', 'canvas', 'video', 'iframe', 'object', 'embed']);
+
 function getStandaloneInlineLineRect(node, style) {
+  if (REPLACED_INLINE_TAGS.has((node?.tagName || '').toLowerCase())) return null;
   if (!node?.parentElement || style.display !== 'inline' || renderedTextLineCount(node) !== 1) return null;
   const parent = node.parentElement;
   const parentStyle = window.getComputedStyle(parent);
