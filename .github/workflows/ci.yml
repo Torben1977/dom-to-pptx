@@ -45,9 +45,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # pnpm skips Puppeteer's own browser download, and every test that
-      # measures layout needs a real one.
-      - name: Install the pinned browser
+      # Puppeteer's postinstall fetches the browser, which `pnpm-workspace.yaml`
+      # allows it to do. Idempotent insurance in case that entry is ever lost:
+      # every test that measures layout needs a real browser.
+      - name: Ensure the pinned browser is present
         run: npx puppeteer browsers install chrome
 
       - run: pnpm run lint

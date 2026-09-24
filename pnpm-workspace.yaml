@@ -1,3 +1,12 @@
 packages:
   - '.'
   - 'packages/*'
+
+# pnpm blocks a dependency's install scripts unless it is listed here, and under
+# --frozen-lockfile it fails outright instead of warning. Both of these need
+# theirs: esbuild links the platform binary vitest runs on, puppeteer fetches
+# the pinned browser every layout measurement depends on. Declaring them also
+# stops pnpm from rewriting this file with a placeholder on every install.
+allowBuilds:
+  esbuild: true
+  puppeteer: true
