@@ -11,6 +11,7 @@ const result = spawnSync(
     'src/__tests__/office-roundtrip.integration.test.js',
     'src/__tests__/office-flex-auto-width.integration.test.js',
     'src/__tests__/text-flow-fidelity.integration.test.js',
+    'src/__tests__/subset-matrix.integration.test.js',
     'src/__tests__/image-codec-regression.test.js',
   ],
   {
