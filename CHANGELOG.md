@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2-orglith.18] - 2026-09-24
+
+Found by the fidelity matrix of OrgLith's closed slide subset: one probe per allowed construct, each compared in Chromium and in the LibreOffice render of the export.
+
+### Added
+
+- Fidelity matrix `subset-matrix.integration.test.js` (part of `npm run test:office-roundtrip`). Every probe is checked three ways: its words against Office (the text-flow analysis, now shared in `src/__tests__/helpers/office-fidelity.js`), its box as 8 px colour blocks within the text tolerances, and whether it stays native — a probe without an image of its own must not become a picture. Pictures must carry their element's alt text. All 75 probes are faithful.
+- Linear gradients stay native fills. PptxGenJS writes no gradient fill, so the shape carries the first stop as a placeholder and the gradient travels in the shape name, the same way the stacking order does; `normalizePptxZip` writes the `a:gradFill`. Before, every gradient was a picture. `parseLinearGradient` declines what a native fill cannot hold (several layers, stop positions in length units); those keep the picture.
+- A block that starts right of its text frame's content edge — typically through `margin-left` — is indented by the measured distance. It travels as a second sentinel bullet, U+FDD1, which `normalizePptxZip` turns into `<a:buNone/>` with `indent="0"`: every line moves, the first one too.
+
+### Fixed
+
+- Tables with a small cell padding came out exploded. PptxGenJS reads a cell margin as points only when its first value is at least 1 and otherwise as inches; the converter handed it points, so the browser's default 1px padding (0.75 pt) became 0.75 inch on every side and the cell text broke letter by letter. Cell margins are now passed in inches; tables that were faithful keep the same EMU.
+- An inline `<svg>` alone in its block was stretched to the block's width. Standing alone on a line, an inline element is widened to the line so Office does not wrap it differently — right for text, wrong for a replaced element with a size of its own. `img`, `svg`, `canvas`, `video`, `iframe`, `object` and `embed` are exempt.
+- A border that differs between sides became a picture. With straight corners it is now native: one rectangle per side, as a box without text already had. Rounded or rotated boxes keep the picture that follows their contour.
+- A uniform border sat half outside its box. PowerPoint strokes an outline centred on the shape geometry, CSS paints a border inside the border box; the geometry is now inset by half the stroke, and the text inset shrinks by the same amount.
+- Text beside a border started too far out. The text frame spans the border box, but its inset was the padding alone; it is now border plus padding.
+- Every picture carried the alt text `__type_image`, and an element's own alt text never arrived. `<img alt>` and `<svg aria-label>` (or its `<title>`) are passed on, and `normalizePptxZip` removes the transport, keeping only the element's own text.
+
 ## [2.1.2-orglith.17] - 2026-09-23
 
 ### Added
