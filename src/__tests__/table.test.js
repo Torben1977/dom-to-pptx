@@ -173,6 +173,88 @@ describe('extractTableData', () => {
     document.body.removeChild(container);
   });
 
+  // A transparent cell shows its row, row group, column and column group, in
+  // that order (CSS 2.1 §17.5.1). Reading only the cell turned a highlighted
+  // recommendation row white.
+  describe('cell fill from the layers beneath a transparent cell', () => {
+    const fillsOf = (html, tableStyle = '') => {
+      const table = document.createElement('table');
+      table.setAttribute('style', tableStyle);
+      table.innerHTML = html;
+      document.body.appendChild(table);
+      try {
+        return extractTableData(table, 1).rows.map((row) => row.map((cell) => cell.options.fill?.color ?? null));
+      } finally {
+        table.remove();
+      }
+    };
+
+    it('fills the cells of a row that carries the background', () => {
+      expect(
+        fillsOf(
+          '<tbody><tr><td>Plattform</td><td>allein</td></tr><tr style="background:#ECF7F0"><td>Wertströme</td><td>Empfehlung</td></tr></tbody>'
+        )
+      ).toEqual([
+        [null, null],
+        ['ECF7F0', 'ECF7F0'],
+      ]);
+    });
+
+    it('fills the cells of a row group that carries the background', () => {
+      expect(
+        fillsOf(
+          '<thead><tr><th>Option</th></tr></thead><tbody style="background:#F7F9FC"><tr><td>Pilot</td></tr></tbody>'
+        )
+      ).toEqual([[null], ['F7F9FC']]);
+    });
+
+    it('fills the cells of a column, counting the columns a rowspan occupies', () => {
+      expect(
+        fillsOf(
+          '<colgroup><col><col style="background:#FFF6E8"><col></colgroup>' +
+            '<tbody><tr><td rowspan="2">Pilot</td><td>Kosten</td><td>Zeit</td></tr><tr><td>120 T€</td><td>6 Monate</td></tr></tbody>'
+        )
+      ).toEqual([
+        [null, 'FFF6E8', null],
+        ['FFF6E8', null],
+      ]);
+    });
+
+    it('lets a cell background win over the row beneath it', () => {
+      expect(
+        fillsOf(
+          '<tbody><tr style="background:#ECF7F0"><td style="background:#FFFFFF">eigen</td><td>Zeile</td></tr></tbody>'
+        )
+      ).toEqual([['FFFFFF', 'ECF7F0']]);
+    });
+
+    it('flattens a translucent row against the table beneath it', () => {
+      // rgba(255,255,255,0.5) over #0E1B2C (14, 27, 44): 134.5 → 87, 141 → 8D, 149.5 → 96.
+      expect(
+        fillsOf('<tbody><tr style="background:rgba(255,255,255,0.5)"><td>hell</td></tr></tbody>', 'background:#0E1B2C')
+      ).toEqual([['878D96']]);
+    });
+
+    it('blends a translucent cell over a translucent row before the table beneath both', () => {
+      // White at 0.5 over black at 0.5 is #AAAAAA at 0.75; over #0E1B2C (14, 27, 44)
+      // that gives 131 → 83, 134.25 → 86, 138.5 → 8B.
+      expect(
+        fillsOf(
+          '<tbody><tr style="background:rgba(0,0,0,0.5)"><td style="background:rgba(255,255,255,0.5)">beide</td></tr></tbody>',
+          'background:#0E1B2C'
+        )
+      ).toEqual([['83868B']]);
+    });
+
+    // The table's own background travels as the backing shape beneath the table.
+    // Repeating it on every cell would paint square corners over a rounded one.
+    it('leaves the table background to the backing shape', () => {
+      expect(fillsOf('<tbody><tr><td>Zelle</td></tr></tbody>', 'background:#0E1B2C;border-radius:12px')).toEqual([
+        [null],
+      ]);
+    });
+  });
+
   it('correctly calculates and sets bullet.indent for list items with padding-left', async () => {
     mockAddText.mockClear();
 

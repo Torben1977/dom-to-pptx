@@ -65,6 +65,25 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
     for (let i = 0; i < span; i++) explicitColWidths.push(widthPerColumn);
   }
 
+  // Column groups and columns paint beneath the row groups, rows and cells
+  // (CSS 2.1 §17.5.1), so every logical column keeps both, the column first.
+  const columnLayers = [];
+  for (const group of Array.from(node.children).filter(
+    (child) => (child?.tagName || '').toLowerCase() === 'colgroup'
+  )) {
+    const cols = Array.from(group.children).filter((child) => (child?.tagName || '').toLowerCase() === 'col');
+    if (cols.length === 0) {
+      const span = parseInt(group.getAttribute('span')) || 1;
+      for (let i = 0; i < span; i++) columnLayers.push([group]);
+    }
+    for (const col of cols) {
+      const span = parseInt(col.getAttribute('span')) || 1;
+      for (let i = 0; i < span; i++) columnLayers.push([col, group]);
+    }
+  }
+  // The logical column each cell starts in, as the grid below resolves it.
+  const cellColumns = new Map();
+
   const isInsideDisplayNoneGroup = (row) => {
     for (let current = row; current && current !== node; current = current.parentElement) {
       if (window.getComputedStyle(current).display === 'none') return true;
@@ -97,6 +116,7 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
           cursor++;
           while (occupied[cursor]) cursor++;
         }
+        cellColumns.set(cell, cursor);
 
         const measuredWidth = widthInches(cell);
         if (measuredWidth > 0) {
@@ -211,12 +231,24 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
       const textStyle = getTextStyle(style, scale);
 
       // B. Cell Background
-      let bg = parseColor(style.backgroundColor, style);
-      if ((!bg.hex || bg.opacity === 0) && style.backgroundImage && style.backgroundImage !== 'none') {
-        const fallback = getGradientFallbackColor(style.backgroundImage, style);
-        if (fallback) bg = parseColor(fallback, style);
+      // A cell the browser leaves transparent shows the layers beneath it: its
+      // row, the row group, then its column and column group (CSS 2.1 §17.5.1).
+      // Reading the cell alone lost every highlighted row. The table's own
+      // background is not one of these layers; it travels as the backing shape
+      // drawn beneath the table, which also keeps rounded table corners that
+      // corner cells would paint over. Whatever the layers leave see-through is
+      // flattened against the table and what lies beneath it. A PowerPoint cell
+      // has one fill, so a spanning cell takes the row and column it starts in;
+      // the browser would split it where the rows or columns beneath differ.
+      const rowGroupTag = (tr.parentElement?.tagName || '').toLowerCase();
+      const rowGroup = ['thead', 'tbody', 'tfoot'].includes(rowGroupTag) ? tr.parentElement : null;
+      const layers = [cell, tr, rowGroup, ...(columnLayers[cellColumns.get(cell)] || [])].filter(Boolean);
+      let bg = { hex: null, opacity: 0 };
+      for (const layer of layers) {
+        bg = compositeColors(bg, getBackgroundFillColor(layer));
+        if (bg.opacity >= 1) break;
       }
-      bg = flattenColor(bg, cell);
+      bg = flattenColor(bg, node, false);
       const fill = bg.hex && bg.opacity > 0 ? { color: bg.hex } : null;
 
       // C. Alignment
@@ -742,16 +774,55 @@ export function parseColor(str, style) {
   return { hex, opacity: a };
 }
 
+/** The colour an element paints behind its content; a gradient stands in with its first colour. */
+function getBackgroundFillColor(element) {
+  const style = window.getComputedStyle(element);
+  const color = parseColor(style.backgroundColor, style);
+  if ((!color.hex || color.opacity === 0) && style.backgroundImage && style.backgroundImage !== 'none') {
+    const fallback = getGradientFallbackColor(style.backgroundImage, style);
+    if (fallback) return parseColor(fallback, style);
+  }
+  return color;
+}
+
+/** `{ hex, opacity }` as straight-alpha channels, `{ r, g, b, a }` with r/g/b in 0–255. */
+const toRgba = (color) => ({
+  r: parseInt(color.hex.slice(0, 2), 16),
+  g: parseInt(color.hex.slice(2, 4), 16),
+  b: parseInt(color.hex.slice(4, 6), 16),
+  a: color.opacity,
+});
+
+const toHexColor = ({ r, g, b, a }) => ({
+  hex: [r, g, b]
+    .map((channel) => Math.round(channel).toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase(),
+  opacity: a,
+});
+
+/** `top` painted over `bottom`, both `{ r, g, b, a }`. */
+function blendOver(top, bottom) {
+  const a = top.a + bottom.a * (1 - top.a);
+  if (a <= 0) return { ...top };
+  const channel = (key) => (top[key] * top.a + bottom[key] * bottom.a * (1 - top.a)) / a;
+  return { r: channel('r'), g: channel('g'), b: channel('b'), a };
+}
+
+/** `top` painted over `bottom`, both `{ hex, opacity }`; still see-through where both are. */
+function compositeColors(top, bottom) {
+  const paints = (color) => Boolean(color?.hex) && color.opacity > 0;
+  if (!paints(top)) return bottom;
+  if (!paints(bottom) || top.opacity >= 1) return top;
+  return toHexColor(blendOver(toRgba(top), toRgba(bottom)));
+}
+
 export function flattenColor(color, node, startFromParent = true) {
   if (!color || !color.hex || color.opacity === 1 || color.opacity === 0) {
     return color;
   }
 
-  let r = parseInt(color.hex.slice(0, 2), 16);
-  let g = parseInt(color.hex.slice(2, 4), 16);
-  let b = parseInt(color.hex.slice(4, 6), 16);
-  let a = color.opacity;
-
+  let rgba = toRgba(color);
   let current = node;
   if (startFromParent && node) {
     current = node.parentElement;
@@ -759,51 +830,17 @@ export function flattenColor(color, node, startFromParent = true) {
 
   while (current && current !== document) {
     const style = window.getComputedStyle(current);
-    const bgStr = style.backgroundColor;
-    const bg = parseColor(bgStr, style);
+    const bg = parseColor(style.backgroundColor, style);
 
     if (bg.hex && bg.opacity > 0) {
-      const bgR = parseInt(bg.hex.slice(0, 2), 16);
-      const bgG = parseInt(bg.hex.slice(2, 4), 16);
-      const bgB = parseInt(bg.hex.slice(4, 6), 16);
-      const bgA = bg.opacity;
-
-      const aOut = a + bgA * (1 - a);
-      if (aOut > 0) {
-        r = (r * a + bgR * bgA * (1 - a)) / aOut;
-        g = (g * a + bgG * bgA * (1 - a)) / aOut;
-        b = (b * a + bgB * bgA * (1 - a)) / aOut;
-        a = aOut;
-      }
-
-      if (a >= 1) {
-        a = 1;
-        break;
-      }
+      rgba = blendOver(rgba, toRgba(bg));
+      if (rgba.a >= 1) break;
     }
     current = current.parentElement;
   }
 
-  if (a < 1) {
-    const bgR = 255;
-    const bgG = 255;
-    const bgB = 255;
-    const bgA = 1;
-
-    const aOut = a + bgA * (1 - a);
-    if (aOut > 0) {
-      r = (r * a + bgR * bgA * (1 - a)) / aOut;
-      g = (g * a + bgG * bgA * (1 - a)) / aOut;
-      b = (b * a + bgB * bgA * (1 - a)) / aOut;
-    }
-  }
-
-  const rHex = Math.round(r).toString(16).padStart(2, '0');
-  const gHex = Math.round(g).toString(16).padStart(2, '0');
-  const bHex = Math.round(b).toString(16).padStart(2, '0');
-  const hex = (rHex + gHex + bHex).toUpperCase();
-
-  return { hex, opacity: 1 };
+  if (rgba.a < 1) rgba = blendOver(rgba, { r: 255, g: 255, b: 255, a: 1 });
+  return { ...toHexColor(rgba), opacity: 1 };
 }
 
 export function getPadding(style, scale) {
