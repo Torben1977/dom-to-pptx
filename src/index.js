@@ -14,6 +14,7 @@ import {
   isBlockFlowDisplay,
   isOutOfTextFlow,
   isVisuallySuppressed,
+  measureWrapReservePx,
   isTextContainer,
   isTextContainerCached,
   createShapeMargin,
@@ -1717,97 +1718,6 @@ function countParagraphs(node, scale, pseudoContentByNode = null) {
 
 const TEXT_FIT_TOLERANCE_PX = 0.5;
 const TEXT_GEOMETRY_TOLERANCE_PX = 1;
-// Upper bound of the room a wrapped text frame gets beyond the browser's width:
-// max(8 px, 3 % of the content width), the reserve claude.ai's slide export uses.
-const WRAP_RESERVE_MIN_PX = 8;
-const WRAP_RESERVE_SHARE = 0.03;
-
-/**
- * How much wider than the browser's a wrapped text frame may be, in CSS px.
- *
- * The browser wraps at the exact content edge, so a line that fills it breaks
- * somewhere else in a renderer that sets the text a hair wider (LibreOffice sets
- * IBM Plex Sans Bold about 0.5 % wider and broke "standortübergreifend" mid-word
- * in a 141 pt box) and pulls the next word up in one that sets it narrower
- * (Arial, 0.55 %). Of all the browser's wrap breaks, the one that came closest
- * to not happening bounds the reserve: half its shortfall, so the frame edge
- * sits midway between that break holding and the next word fitting. Capped at
- * WRAP_RESERVE_MIN_PX / WRAP_RESERVE_SHARE.
- */
-function measureWrapReservePx(node, style) {
-  // Without a layout (jsdom) there are no lines to measure and no reserve.
-  if (typeof document.createRange().getClientRects !== 'function') return 0;
-  const box = node.getBoundingClientRect();
-  const contentWidth =
-    box.width -
-    (parseFloat(style.borderLeftWidth) || 0) -
-    (parseFloat(style.paddingLeft) || 0) -
-    (parseFloat(style.borderRightWidth) || 0) -
-    (parseFloat(style.paddingRight) || 0);
-  let reserve = Math.max(WRAP_RESERVE_MIN_PX, WRAP_RESERVE_SHARE * contentWidth);
-
-  // Lines break against the content edge of the block they flow in.
-  const edges = new Map();
-  const blockRight = (element) => {
-    let block = element;
-    while (block !== node && window.getComputedStyle(block).display.startsWith('inline')) block = block.parentElement;
-    if (!edges.has(block)) {
-      const blockStyle = window.getComputedStyle(block);
-      edges.set(
-        block,
-        block.getBoundingClientRect().right -
-          (parseFloat(blockStyle.borderRightWidth) || 0) -
-          (parseFloat(blockStyle.paddingRight) || 0)
-      );
-    }
-    return { block, right: edges.get(block) };
-  };
-  const inFlow = (element) => {
-    for (let current = element; current && current !== node; current = current.parentElement) {
-      if (isOutOfTextFlow(window.getComputedStyle(current))) return false;
-    }
-    return true;
-  };
-
-  // One entry per line piece of a word; a word the browser hyphenated has two.
-  const pieces = [];
-  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-    const parent = text.parentElement;
-    if (!parent || isVisuallySuppressed(parent) || !inFlow(parent)) continue;
-    const edge = blockRight(parent);
-    const pattern = /\S+/g;
-    let match;
-    while ((match = pattern.exec(text.textContent))) {
-      const range = document.createRange();
-      range.setStart(text, match.index);
-      range.setEnd(text, match.index + match[0].length);
-      Array.from(range.getClientRects())
-        .filter((rect) => rect.width > 0)
-        .forEach((rect, index) => pieces.push({ rect, edge, startsWord: index === 0 }));
-    }
-  }
-
-  const nextLine = (a, b) => b.rect.top >= a.rect.bottom - (a.rect.bottom - a.rect.top) / 2;
-  const gaps = pieces
-    .slice(1)
-    .map((piece, index) => [pieces[index], piece])
-    .filter(([a, b]) => b.startsWord && a.edge.block === b.edge.block && !nextLine(a, b))
-    .map(([a, b]) => b.rect.left - a.rect.right)
-    .filter((gap) => gap > 0)
-    .sort((a, b) => a - b);
-  const gap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.25 * (parseFloat(style.fontSize) || 16);
-
-  for (let index = 1; index < pieces.length; index++) {
-    const [a, b] = [pieces[index - 1], pieces[index]];
-    if (a.edge.block !== b.edge.block || !nextLine(a, b)) continue;
-    const shortfall = a.rect.right + (b.startsWord ? gap : 0) + b.rect.width - a.edge.right;
-    // A break with room to spare was forced (a <br>, the end of a block) and
-    // does not move with the frame's width.
-    if (shortfall > 0) reserve = Math.min(reserve, shortfall / 2);
-  }
-  return reserve;
-}
 
 function countRenderedTextLines(rects, lineHeight, writingMode = 'horizontal-tb') {
   const visible = rects.filter((rect) => rect.width > 0 && rect.height > 0);

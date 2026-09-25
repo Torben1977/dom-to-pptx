@@ -91,6 +91,50 @@ describe('wrap reserve of multi-line text frames', () => {
   });
 });
 
+// A column the browser squeezes to its longest word leaves that word no room at
+// all. The cell cannot outgrow its column, so the reserve comes out of the cell
+// inset on the side the text grows towards; the column keeps its width.
+describe('wrap reserve of table cells', () => {
+  const WORD = 'Ausführungskomplexität';
+  const FILLER = 'Niedrig, mittel oder hoch, je nachdem wie viele Standorte beteiligt sind';
+
+  const marginsPx = (cell) => {
+    const margin = (side) => Number(cell.match(new RegExp(`<a:tcPr[^>]*\\b${side}="(\\d+)"`))?.[1] ?? 0) / EMU_PER_PX;
+    return { left: margin('marL'), right: margin('marR') };
+  };
+
+  // Each table is 420 px wide, so its first column shrinks to WORD plus padding.
+  const table = (top, cellStyle) =>
+    `<table style="position: absolute; left: 80px; top: ${top}px; width: 420px; border-collapse: collapse; font: 700 18px/26px Arial, sans-serif">` +
+    `<tr><td style="${cellStyle}">${WORD}</td><td style="padding: 4px 12px">${FILLER}</td></tr></table>`;
+
+  it('takes the reserve out of the inset on the side the text grows towards', async () => {
+    const xml = await exportSlide(
+      table(40, 'padding: 4px 12px') +
+        table(200, 'padding: 4px 12px; text-align: center') +
+        table(360, 'padding: 4px 12px; text-align: right') +
+        table(520, 'padding: 4px 3px')
+    );
+    const cells = Array.from(xml.matchAll(/<a:tc(?:\s[^>]*)?>[\s\S]*?<\/a:tc>/g), (match) => match[0]).filter((tc) =>
+      tc.includes(`<a:t>${WORD}</a:t>`)
+    );
+    expect(cells).toHaveLength(4);
+    // One line and no break to measure against: the full max(8 px, 3 %).
+    const reserve = Math.max(8, 0.03 * (await widthOf(WORD)));
+    const [left, center, right, tight] = cells.map(marginsPx);
+
+    expect(left.left).toBeCloseTo(12, 1);
+    expect(left.right).toBeCloseTo(12 - reserve, 1);
+    expect(center.left).toBeCloseTo(12 - reserve / 2, 1);
+    expect(center.right).toBeCloseTo(12 - reserve / 2, 1);
+    expect(right.left).toBeCloseTo(12 - reserve, 1);
+    expect(right.right).toBeCloseTo(12, 1);
+    // An inset smaller than the reserve is used up, never turned negative.
+    expect(tight.left).toBeCloseTo(3, 1);
+    expect(tight.right).toBe(0);
+  });
+});
+
 /** The width Chrome gives a word in the test's font, for comparing frames against. */
 async function widthOf(word) {
   const { default: puppeteer } = await import('puppeteer');

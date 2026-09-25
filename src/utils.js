@@ -264,13 +264,34 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
       // CSS Padding px -> PPTX Margin pt
       const padding = getPadding(style, scale);
       // getPadding returns [top, right, bottom, left] in inches relative to scale
-      // PptxGenJS expects points (pt) for margin: [t, r, b, l]
-      const margin = createTableCellMargin(
+      const marginPt = [
         padding[0] * 72 + vSpacePt / 2, // top
         padding[1] * 72 + hSpacePt / 2, // right
         padding[2] * 72 + vSpacePt / 2, // bottom
-        padding[3] * 72 + hSpacePt / 2 // left
-      );
+        padding[3] * 72 + hSpacePt / 2, // left
+      ];
+      // A column the browser squeezed to its longest word leaves that word no
+      // room at all, and an Office renderer that sets it a hair wider breaks it
+      // in the middle ("Ausführungskomplexitä|t"). A cell cannot outgrow its
+      // column, so the reserve a wrapped text frame gets (measureWrapReservePx)
+      // comes out of the inset on the side the text grows towards; column
+      // widths, fills, borders and row heights keep the browser's geometry.
+      const writingModeVert = getWritingModeVert(style.writingMode, style.textOrientation);
+      if (style.direction !== 'rtl' && (!writingModeVert || writingModeVert === 'none')) {
+        const reservePt = measureWrapReservePx(cell, style) * 0.75 * scale;
+        const shrink = (side, amountPt) => {
+          marginPt[side] -= Math.min(marginPt[side], amountPt);
+        };
+        if (align === 'center') {
+          shrink(1, reservePt / 2);
+          shrink(3, reservePt / 2);
+        } else if (align === 'right') {
+          shrink(3, reservePt);
+        } else {
+          shrink(1, reservePt);
+        }
+      }
+      const margin = createTableCellMargin(...marginPt);
 
       // E. Borders
       const borderTop = getTableBorder(style, 'Top', scale, cell);
@@ -279,7 +300,6 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
       const borderLeft = getTableBorder(style, 'Left', scale, cell);
 
       // F. Text Direction
-      const writingModeVert = getWritingModeVert(style.writingMode, style.textOrientation);
       const textDirection = mapVertToTextDirection(writingModeVert);
 
       // G. Construct Cell Object
@@ -316,6 +336,101 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
   });
 
   return { rows, colWidths, rowHeights };
+}
+
+// Upper bound of the room wrapped text gets beyond the browser's content edge:
+// max(8 px, 3 % of the content width), the reserve claude.ai's slide export uses.
+const WRAP_RESERVE_MIN_PX = 8;
+const WRAP_RESERVE_SHARE = 0.03;
+
+/**
+ * How much room wrapped text may get beyond the browser's content edge, in CSS
+ * px. A text frame takes it from its inset and, if it paints nothing, from
+ * outside its box; a table cell, which cannot outgrow its column, from its
+ * inset alone.
+ *
+ * The browser wraps at the exact content edge, so a line that fills it breaks
+ * somewhere else in a renderer that sets the text a hair wider (LibreOffice sets
+ * IBM Plex Sans Bold about 0.5 % wider and broke "standortübergreifend" mid-word
+ * in a 141 pt box) and pulls the next word up in one that sets it narrower
+ * (Arial, 0.55 %). Of all the browser's wrap breaks, the one that came closest
+ * to not happening bounds the reserve: half its shortfall, so the frame edge
+ * sits midway between that break holding and the next word fitting. Capped at
+ * WRAP_RESERVE_MIN_PX / WRAP_RESERVE_SHARE.
+ */
+export function measureWrapReservePx(node, style) {
+  // Without a layout (jsdom) there are no lines to measure and no reserve.
+  if (typeof document.createRange().getClientRects !== 'function') return 0;
+  const box = node.getBoundingClientRect();
+  const contentWidth =
+    box.width -
+    (parseFloat(style.borderLeftWidth) || 0) -
+    (parseFloat(style.paddingLeft) || 0) -
+    (parseFloat(style.borderRightWidth) || 0) -
+    (parseFloat(style.paddingRight) || 0);
+  let reserve = Math.max(WRAP_RESERVE_MIN_PX, WRAP_RESERVE_SHARE * contentWidth);
+
+  // Lines break against the content edge of the block they flow in.
+  const edges = new Map();
+  const blockRight = (element) => {
+    let block = element;
+    while (block !== node && window.getComputedStyle(block).display.startsWith('inline')) block = block.parentElement;
+    if (!edges.has(block)) {
+      const blockStyle = window.getComputedStyle(block);
+      edges.set(
+        block,
+        block.getBoundingClientRect().right -
+          (parseFloat(blockStyle.borderRightWidth) || 0) -
+          (parseFloat(blockStyle.paddingRight) || 0)
+      );
+    }
+    return { block, right: edges.get(block) };
+  };
+  const inFlow = (element) => {
+    for (let current = element; current && current !== node; current = current.parentElement) {
+      if (isOutOfTextFlow(window.getComputedStyle(current))) return false;
+    }
+    return true;
+  };
+
+  // One entry per line piece of a word; a word the browser hyphenated has two.
+  const pieces = [];
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    const parent = text.parentElement;
+    if (!parent || isVisuallySuppressed(parent) || !inFlow(parent)) continue;
+    const edge = blockRight(parent);
+    const pattern = /\S+/g;
+    let match;
+    while ((match = pattern.exec(text.textContent))) {
+      const range = document.createRange();
+      range.setStart(text, match.index);
+      range.setEnd(text, match.index + match[0].length);
+      Array.from(range.getClientRects())
+        .filter((rect) => rect.width > 0)
+        .forEach((rect, index) => pieces.push({ rect, edge, startsWord: index === 0 }));
+    }
+  }
+
+  const nextLine = (a, b) => b.rect.top >= a.rect.bottom - (a.rect.bottom - a.rect.top) / 2;
+  const gaps = pieces
+    .slice(1)
+    .map((piece, index) => [pieces[index], piece])
+    .filter(([a, b]) => b.startsWord && a.edge.block === b.edge.block && !nextLine(a, b))
+    .map(([a, b]) => b.rect.left - a.rect.right)
+    .filter((gap) => gap > 0)
+    .sort((a, b) => a - b);
+  const gap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.25 * (parseFloat(style.fontSize) || 16);
+
+  for (let index = 1; index < pieces.length; index++) {
+    const [a, b] = [pieces[index - 1], pieces[index]];
+    if (a.edge.block !== b.edge.block || !nextLine(a, b)) continue;
+    const shortfall = a.rect.right + (b.startsWord ? gap : 0) + b.rect.width - a.edge.right;
+    // A break with room to spare was forced (a <br>, the end of a block) and
+    // does not move with the frame's width.
+    if (shortfall > 0) reserve = Math.min(reserve, shortfall / 2);
+  }
+  return reserve;
 }
 
 // Checks if any parent element has overflow: hidden which would clip this element
