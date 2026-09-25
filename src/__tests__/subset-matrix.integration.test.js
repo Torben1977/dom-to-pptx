@@ -59,11 +59,7 @@ const PICTURE_COVER_LIMIT = 0.5;
 // Defect kinds per probe today. A clean probe is absent; an entry means the
 // construct is not faithful yet and must be fixed here or leave the subset.
 // Keep the kinds, not the measured numbers: those vary with fonts and builds.
-const KNOWN_DEFECTS = {
-  // Borders meeting at a zero-size box draw a triangle in the browser; PowerPoint
-  // gets the box's rectangle in the visible border's colour.
-  'shape:css-triangle': ['paint'],
-};
+const KNOWN_DEFECTS = {};
 
 let outputDir;
 let browserPages;

@@ -1,7 +1,12 @@
 // src/pptx-normalizer.js
 import { buildTimingXml } from './animations/xml-templates.js';
 import { getTransitionXml } from './animations/transitions.js';
-import { BLOCK_INDENT_BULLET_CODE, HANGING_INDENT_BULLET_CODE, decodeGradientTransport } from './utils.js';
+import {
+  BLOCK_INDENT_BULLET_CODE,
+  HANGING_INDENT_BULLET_CODE,
+  RIGHT_INDENT_TAB_SENTINEL_EMU,
+  decodeGradientTransport,
+} from './utils.js';
 //
 // Defensive OOXML normalizer that runs over the PPTX produced by PptxGenJS
 // before we hand the .pptx blob to the user. Microsoft PowerPoint refuses to
@@ -268,6 +273,20 @@ function cleanParagraphProperties(doc) {
         if (!Array.from(targetPPr.childNodes).some((node) => node.nodeType === 1 && node.localName === 'buNone')) {
           targetPPr.appendChild(doc.createElementNS(targetPPr.namespaceURI, 'a:buNone'));
         }
+        mutated = true;
+      }
+
+      // A paragraph narrower than its text frame carries its right margin as a
+      // tab-stop pair, because PptxGenJS writes no marR (see applyBlockRightIndent).
+      const tabList = Array.from(targetPPr.childNodes).find(
+        (node) => node.nodeType === 1 && node.localName === 'tabLst'
+      );
+      const tabs = tabList
+        ? Array.from(tabList.childNodes).filter((node) => node.nodeType === 1 && node.localName === 'tab')
+        : [];
+      if (tabs.length === 2 && tabs[0].getAttribute('pos') === String(RIGHT_INDENT_TAB_SENTINEL_EMU)) {
+        targetPPr.setAttribute('marR', tabs[1].getAttribute('pos'));
+        targetPPr.removeChild(tabList);
         mutated = true;
       }
 

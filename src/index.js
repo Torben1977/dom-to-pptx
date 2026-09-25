@@ -3619,9 +3619,9 @@ function isComplexHierarchy(root) {
 }
 
 function createCompositeBorderItems(sides, x, y, w, h, scale, zIndex, domOrder) {
-  const items = [];
   const pxToInch = 1 / 96;
-  const common = { type: 'shape', zIndex: zIndex, domOrder, shapeType: 'rect' };
+  const inches = (side) => side.width * pxToInch * scale;
+  const [t, r, b, l] = [sides.top, sides.right, sides.bottom, sides.left].map(inches);
 
   const dashedLine = (side, lineX, lineY, lineW, lineH) => ({
     type: 'shape',
@@ -3641,81 +3641,86 @@ function createCompositeBorderItems(sides, x, y, w, h, scale, zIndex, domOrder) 
       },
     },
   });
+  const dashed = {
+    top: (side) => dashedLine(side, x, y + t / 2, w, 0),
+    right: (side) => dashedLine(side, x + w - r / 2, y, 0, h),
+    bottom: (side) => dashedLine(side, x, y + h - b / 2, w, 0),
+    left: (side) => dashedLine(side, x + l / 2, y, 0, h),
+  };
 
-  if (sides.top.width > 0)
-    items.push(
-      sides.top.style === 'dashed' || sides.top.style === 'dotted'
-        ? dashedLine(sides.top, x, y + (sides.top.width * pxToInch * scale) / 2, w, 0)
-        : {
-            ...common,
-            options: {
-              x,
-              y,
-              w,
-              h: sides.top.width * pxToInch * scale,
-              fill: {
-                color: sides.top.color,
-                ...(sides.top.opacity < 1 && { transparency: (1 - sides.top.opacity) * 100 }),
-              },
-            },
-          }
-    );
-  if (sides.right.width > 0)
-    items.push(
-      sides.right.style === 'dashed' || sides.right.style === 'dotted'
-        ? dashedLine(sides.right, x + w - (sides.right.width * pxToInch * scale) / 2, y, 0, h)
-        : {
-            ...common,
-            options: {
-              x: x + w - sides.right.width * pxToInch * scale,
-              y,
-              w: sides.right.width * pxToInch * scale,
-              h,
-              fill: {
-                color: sides.right.color,
-                ...(sides.right.opacity < 1 && { transparency: (1 - sides.right.opacity) * 100 }),
-              },
-            },
-          }
-    );
-  if (sides.bottom.width > 0)
-    items.push(
-      sides.bottom.style === 'dashed' || sides.bottom.style === 'dotted'
-        ? dashedLine(sides.bottom, x, y + h - (sides.bottom.width * pxToInch * scale) / 2, w, 0)
-        : {
-            ...common,
-            options: {
-              x,
-              y: y + h - sides.bottom.width * pxToInch * scale,
-              w,
-              h: sides.bottom.width * pxToInch * scale,
-              fill: {
-                color: sides.bottom.color,
-                ...(sides.bottom.opacity < 1 && { transparency: (1 - sides.bottom.opacity) * 100 }),
-              },
-            },
-          }
-    );
-  if (sides.left.width > 0)
-    items.push(
-      sides.left.style === 'dashed' || sides.left.style === 'dotted'
-        ? dashedLine(sides.left, x + (sides.left.width * pxToInch * scale) / 2, y, 0, h)
-        : {
-            ...common,
-            options: {
-              x,
-              y,
-              w: sides.left.width * pxToInch * scale,
-              h,
-              fill: {
-                color: sides.left.color,
-                ...(sides.left.opacity < 1 && { transparency: (1 - sides.left.opacity) * 100 }),
-              },
-            },
-          }
-    );
+  // A solid side paints the band between the outer edge and the padding edge,
+  // cut diagonally where it meets a neighbouring side of any colour — that is
+  // what the browser fills. Beside zero-width neighbours the band is a
+  // rectangle; beside wide ones a trapezoid; in a box without content a
+  // triangle, which is how CSS draws arrows. Corners run clockwise.
+  const regions = {
+    top: [
+      [0, 0],
+      [w, 0],
+      [w - r, t],
+      [l, t],
+    ],
+    right: [
+      [w, 0],
+      [w, h],
+      [w - r, h - b],
+      [w - r, t],
+    ],
+    bottom: [
+      [w, h],
+      [0, h],
+      [l, h - b],
+      [w - r, h - b],
+    ],
+    left: [
+      [0, h],
+      [0, 0],
+      [l, t],
+      [l, h - b],
+    ],
+  };
+  const EPSILON = 1e-6;
+  const solid = (name, side) => {
+    const corners = regions[name];
+    const xs = corners.map(([cornerX]) => cornerX);
+    const ys = corners.map(([, cornerY]) => cornerY);
+    const [left, top, right, bottom] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    const onBox = (value, low, high) => Math.abs(value - low) < EPSILON || Math.abs(value - high) < EPSILON;
+    const distinct = new Set(corners.map(([cornerX, cornerY]) => `${cornerX.toFixed(6)},${cornerY.toFixed(6)}`));
+    const rectangular =
+      distinct.size === 4 &&
+      corners.every(([cornerX, cornerY]) => onBox(cornerX, left, right) && onBox(cornerY, top, bottom));
+    const options = {
+      x: x + left,
+      y: y + top,
+      w: right - left,
+      h: bottom - top,
+      fill: {
+        color: side.color,
+        ...(side.opacity < 1 && { transparency: (1 - side.opacity) * 100 }),
+      },
+    };
+    if (rectangular) return { type: 'shape', zIndex, domOrder, shapeType: 'rect', options };
+    return {
+      type: 'shape',
+      zIndex,
+      domOrder,
+      shapeType: 'custGeom',
+      options: {
+        ...options,
+        points: [...corners.map(([cornerX, cornerY]) => ({ x: cornerX - left, y: cornerY - top })), { close: true }],
+      },
+    };
+  };
 
-  return items;
+  // A transparent side paints nothing; it still shapes its neighbours' diagonals.
+  return ['top', 'right', 'bottom', 'left']
+    .filter((name) => sides[name].width > 0 && sides[name].opacity > 0)
+    .map((name) =>
+      sides[name].style === 'dashed' || sides[name].style === 'dotted'
+        ? dashed[name](sides[name])
+        : solid(name, sides[name])
+    );
 }
 
 function getBrowserAnimationName(name, direction, orientation) {

@@ -1018,6 +1018,32 @@ export function applyBlockIndent(textParts, indentPt) {
   }
 }
 
+/**
+ * First tab stop of the pair that carries a paragraph's right margin past
+ * PptxGenJS, which writes no marR at all: the tab-stop list is the one
+ * per-paragraph list it passes through. A stop at one EMU is nothing a measured
+ * layout produces, and the converter emits no tab stops of its own, so
+ * `normalizePptxZip` reads the second stop's position as marR and drops both.
+ */
+export const RIGHT_INDENT_TAB_SENTINEL_EMU = 1;
+
+/**
+ * Ends every paragraph in `textParts` `indentPt` points left of the text frame's
+ * content edge — a block narrower than the frame, e.g. through `width` or
+ * `margin-right`, whose lines wrap at its own edge. A nested block's own margin,
+ * applied first, stays.
+ */
+export function applyBlockRightIndent(textParts, indentPt) {
+  for (const part of textParts || []) {
+    if (!part.options) part.options = {};
+    if (part.options.tabStops) continue;
+    part.options.tabStops = [
+      { position: RIGHT_INDENT_TAB_SENTINEL_EMU / 914400, alignment: 'l' },
+      { position: indentPt / 72, alignment: 'l' },
+    ];
+  }
+}
+
 export function applyHangingIndent(textParts, hangPt) {
   let startsParagraph = true;
   for (const part of textParts || []) {
@@ -2664,18 +2690,20 @@ export function collectTextParts(
   isRoot = true,
   inheritedOpacity = 1,
   pseudoContentByNode = null,
-  frameLeft = null
+  frameLeft = null,
+  frameRight = null
 ) {
   if (node.nodeType === 1 && isVisuallySuppressed(node)) return [];
 
-  // Where the text frame's lines start; a block inside that starts further right
-  // is indented by the measured difference, not by whatever margin produced it.
+  // Where the text frame's lines start and end; a block inside that starts
+  // further right or ends further left is indented by the measured difference,
+  // not by whatever margin or width produced it.
   if (frameLeft === null && isRoot && node.nodeType === 1 && typeof node.getBoundingClientRect === 'function') {
     const rootStyle = window.getComputedStyle(node);
-    frameLeft =
-      node.getBoundingClientRect().left +
-      (parseFloat(rootStyle.borderLeftWidth) || 0) +
-      (parseFloat(rootStyle.paddingLeft) || 0);
+    const rootBox = node.getBoundingClientRect();
+    frameLeft = rootBox.left + (parseFloat(rootStyle.borderLeftWidth) || 0) + (parseFloat(rootStyle.paddingLeft) || 0);
+    frameRight =
+      rootBox.right - (parseFloat(rootStyle.borderRightWidth) || 0) - (parseFloat(rootStyle.paddingRight) || 0);
   }
 
   const parts = [];
@@ -2842,15 +2870,21 @@ export function collectTextParts(
           false,
           childInheritedOpacity,
           pseudoContentByNode,
-          frameLeft
+          frameLeft,
+          frameRight
         );
         if (isBlock && frameLeft !== null && childParts.length > 0) {
+          const childBox = child.getBoundingClientRect();
           const childLeft =
-            child.getBoundingClientRect().left +
-            (parseFloat(childStyle.borderLeftWidth) || 0) +
-            (parseFloat(childStyle.paddingLeft) || 0);
+            childBox.left + (parseFloat(childStyle.borderLeftWidth) || 0) + (parseFloat(childStyle.paddingLeft) || 0);
           const indentPx = childLeft - frameLeft;
           if (indentPx > 0.5) applyBlockIndent(childParts, indentPx * 0.75 * scale);
+          const childRight =
+            childBox.right -
+            (parseFloat(childStyle.borderRightWidth) || 0) -
+            (parseFloat(childStyle.paddingRight) || 0);
+          const rightIndentPx = frameRight - childRight;
+          if (rightIndentPx > 0.5) applyBlockRightIndent(childParts, rightIndentPx * 0.75 * scale);
         }
         if (childParts.length > 0) parts.push(...childParts);
 
