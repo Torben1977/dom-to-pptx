@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2-orglith.19] - 2026-09-25
+
+The fidelity matrix measured less than it claimed. Headless LibreOffice on macOS saw only its bundled fonts, the paint comparison diluted small shapes in their probe box, and nothing checked where Office breaks lines. Measured honestly, three converter defects showed; all three are fixed.
+
+### Added
+
+- `convertToPdf` in `src/__tests__/helpers/office-fidelity.js`: every Office test converts through it, and on macOS it points fontconfig at the system font directories. Before, Arial arrived as Liberation Sans and Helvetica as Linux Libertine.
+- The paint comparison also measures every element of a probe that paints (fill, visible border side, shadow, picture) in its own box. A CSS triangle drawn as a rectangle differs in a third of its own box but in 6.8 % of its probe, which passed.
+- Defect kind `rewrap`: per text block, the first line break where Office parts from the browser. An extra break is always one. A word Office pulls up counts only if the browser line lacked more than 1 % of its width, because LibreOffice sets Arial 0.55 % narrower than its design widths, which Chrome keeps.
+
+### Fixed
+
+- A solid side of a border that differs between sides paints its true region: the band between the outer and the padding edge, cut diagonally where it meets a wide neighbour. Beside zero-width neighbours it stays a native rectangle, and elsewhere it becomes a custom geometry. A box without content, which is how CSS draws an arrow, now gives a native triangle instead of a filled rectangle. Transparent sides no longer produce a shape at all.
+- A paragraph that ends left of its text frame's content edge, through `width` or `margin-right`, keeps that edge as `marR`. Before, it ran to the width of the shared text box, often the slide. PptxGenJS writes no `marR`, so the value travels as a tab-stop pair whose first stop sits at the sentinel position of 1 EMU, and `normalizePptxZip` turns it into `marR`.
+- A text frame that wraps gets the room its own line breaks allow: half the smallest shortfall over all of the browser's wrap breaks, capped at max(8 px, 3 %). A one-line frame has no break to keep and gets the whole cap. The room comes out of the inset on the side the text grows towards, and a frame without paint also grows. A frame exactly as wide as the browser's broke words in a renderer that sets the font a hair wider: "standortübergreifen|d" and "mitte|l" in LibreOffice, and titles wrapped a word early.
+
 ## [2.1.2-orglith.18] - 2026-09-24
 
 Found by the fidelity matrix of OrgLith's closed slide subset: one probe per allowed construct, each compared in Chromium and in the LibreOffice render of the export.
