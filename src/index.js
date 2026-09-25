@@ -3246,8 +3246,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     !lineRect &&
     !floatFlowRect &&
     !textPayload.rtlMode &&
-    !(writingModeVert && writingModeVert !== 'none') &&
-    !isRenderedSingleLine(node)
+    !(writingModeVert && writingModeVert !== 'none')
   ) {
     const reservePt = measureWrapReservePx(node, style) * 0.75 * config.scale;
     const [leftInset, rightInset] = textPayload.margin;
