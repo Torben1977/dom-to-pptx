@@ -1493,9 +1493,13 @@ function getPseudoElementRect(hostRect, pseudoStyle) {
   return { left: x, top: y, width: w, height: h };
 }
 
-function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, domOrder, pptx, globalOptions = {}) {
+/**
+ * What a pseudo-element paints, and whether it becomes an object of its own --
+ * a shape, a picture, positioned text -- rather than part of its host's text.
+ */
+function describePseudoElementPaint(node, pseudoType, pseudoContentByNode = null) {
   const pseudoStyle = window.getComputedStyle(node, pseudoType);
-  const content = getResolvedPseudoContent(node, pseudoType, globalOptions._pseudoContentByNode);
+  const content = getResolvedPseudoContent(node, pseudoType, pseudoContentByNode);
   const hasContent = content && content !== 'none' && content !== 'normal' && content !== '""';
 
   const bgColor = parseColor(pseudoStyle.backgroundColor);
@@ -1508,8 +1512,8 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const hasGradient = bgImgStr && bgImgStr.includes('linear-gradient');
 
   // Check for border triangle
-  let wPx = parseFloat(pseudoStyle.width) || 0;
-  let hPx = parseFloat(pseudoStyle.height) || 0;
+  const wPx = parseFloat(pseudoStyle.width) || 0;
+  const hPx = parseFloat(pseudoStyle.height) || 0;
   const borderLeft = parseFloat(pseudoStyle.borderLeftWidth) || 0;
   const borderRight = parseFloat(pseudoStyle.borderRightWidth) || 0;
   const borderTop = parseFloat(pseudoStyle.borderTopWidth) || 0;
@@ -1520,22 +1524,53 @@ function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, do
   const isDisplayNone = pseudoStyle.display === 'none';
   const isVisible = !isDisplayNone && (hasContent || hasBg || hasBorder || hasGradient || isTriangle);
 
-  if (!isVisible) return null;
-
   // Ordinary inline pseudo-content is already part of collectTextParts().
   // Keep a single owner so text is not duplicated. Positioned or decorated
   // pseudo-elements fail this predicate and continue as independent objects.
-  if (hasContent && isInlineTextPseudoStyle(pseudoStyle) && isTextContainer(node)) {
-    return null;
-  }
+  const ownsObject = isVisible && !(hasContent && isInlineTextPseudoStyle(pseudoStyle) && isTextContainer(node));
+
+  return {
+    pseudoStyle,
+    content,
+    hasContent,
+    bgColor,
+    hasBg,
+    borderCol,
+    borderWidth,
+    hasBorder,
+    bgImgStr,
+    hasGradient,
+    borderLeft,
+    borderTop,
+    isTriangle,
+    ownsObject,
+  };
+}
+
+function preparePseudoElementItem(node, pseudoType, hostRect, config, zIndex, domOrder, pptx, globalOptions = {}) {
+  const paint = describePseudoElementPaint(node, pseudoType, globalOptions._pseudoContentByNode);
+  if (!paint.ownsObject) return null;
+  const {
+    pseudoStyle,
+    content,
+    hasContent,
+    bgColor,
+    hasBg,
+    borderCol,
+    borderWidth,
+    hasBorder,
+    bgImgStr,
+    hasGradient,
+    borderLeft,
+    borderTop,
+    isTriangle,
+  } = paint;
 
   const rect = getPseudoElementRect(hostRect, pseudoStyle);
   if (!rect) {
-    if (isVisible) {
-      console.warn(
-        `dom-to-pptx: Unsupported pseudo-element ${pseudoType} on ${getNodeSelector(node)} due to zero dimensions. Element dropped.`
-      );
-    }
+    console.warn(
+      `dom-to-pptx: Unsupported pseudo-element ${pseudoType} on ${getNodeSelector(node)} due to zero dimensions. Element dropped.`
+    );
     return null;
   }
 
@@ -2482,7 +2517,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   }
 
   const nodeTag = (node?.tagName || '').toLowerCase();
-  if ((nodeTag === 'ul' || nodeTag === 'ol') && !isComplexHierarchy(node)) {
+  if ((nodeTag === 'ul' || nodeTag === 'ol') && !isComplexHierarchy(node, globalOptions._pseudoContentByNode)) {
     const listItems = [];
     const liChildren = Array.from(node.children).filter((c) => (c?.tagName || '').toLowerCase() === 'li');
 
@@ -3656,7 +3691,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   return { items, job: combinedJob, stopRecursion: !!textPayload || !!shadowSvg };
 }
 
-function isComplexHierarchy(root) {
+function isComplexHierarchy(root, pseudoContentByNode = null) {
   // Use a simple tree traversal to find forbidden elements in the list structure
   const stack = [root];
   while (stack.length > 0) {
@@ -3668,6 +3703,30 @@ function isComplexHierarchy(root) {
     if (elTag === 'li') {
       const s = window.getComputedStyle(el);
       if (s.display === 'flex' || s.display === 'grid' || s.display === 'inline-flex') return true;
+
+      // 1b. An item that paints -- a separator line, a fill, a shadow -- or
+      // whose ::before/::after paints as an object of its own, such as a dot
+      // marker. One text box for the whole list has room for neither, so both
+      // were dropped; pseudo-elements are no DOM children and step 2b misses them.
+      const background = parseColor(s.backgroundColor);
+      const paintsBorder = ['Top', 'Right', 'Bottom', 'Left'].some(
+        (side) => (parseFloat(s[`border${side}Width`]) || 0) > 0 && parseColor(s[`border${side}Color`]).opacity > 0
+      );
+      if (
+        (background.hex && background.opacity > 0) ||
+        (s.backgroundImage && s.backgroundImage !== 'none') ||
+        (s.boxShadow && s.boxShadow !== 'none') ||
+        paintsBorder
+      ) {
+        return true;
+      }
+      if (
+        ['::before', '::after'].some(
+          (pseudoType) => describePseudoElementPaint(el, pseudoType, pseudoContentByNode).ownsObject
+        )
+      ) {
+        return true;
+      }
     }
 
     // 2. Media / Icons

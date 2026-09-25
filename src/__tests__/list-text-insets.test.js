@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { exportToPptx } from '../index.js';
+import { exportHtmlToPptx } from '../node-exporter.js';
 
 // A 1920px-wide root is exported as a 10in slide, so 1 CSS px is 914400 / 96 / 2 EMU,
 // and 1 CSS px of padding is 0.75 / 2 pt.
@@ -456,5 +457,49 @@ describe('list text insets', () => {
     } finally {
       slide.remove();
     }
+  });
+});
+
+// A list item that paints -- a separator line, a dot drawn by its ::before --
+// has nowhere to go in one text box for the whole list. The list takes the
+// ordinary path then, which draws both; pseudo-elements are no DOM children,
+// so the out-of-flow check alone never saw the dot.
+describe('lists whose items paint', () => {
+  const exportList = async (itemCss, beforeCss) => {
+    const html = `<!doctype html><html><head><style>
+        * { box-sizing: border-box; margin: 0; }
+        .slide { position: relative; width: 1280px; height: 720px; background: white; }
+        ul { position: absolute; left: 100px; top: 100px; width: 360px; list-style: none; padding: 0; }
+        li { font: 14pt/20pt Arial, sans-serif; color: #4B5563; ${itemCss} }
+        li::before { ${beforeCss} }
+      </style></head><body><section class="slide"><ul><li>Erster Punkt</li><li>Zweiter Punkt</li><li>Dritter Punkt</li></ul></section></body></html>`;
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const xml = await (await JSZip.loadAsync(buffer)).file('ppt/slides/slide1.xml').async('string');
+    return Array.from(xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g), (match) => match[0]);
+  };
+
+  it('keeps the dot markers and separator lines of painted items', async () => {
+    const shapes = await exportList(
+      'position: relative; padding: 10px 0 10px 20px; border-bottom: 1px solid #E5E7EB;',
+      'content: ""; position: absolute; left: 0; top: 18px; width: 7px; height: 7px; background: #F24726; border-radius: 50%;'
+    );
+    const withText = (text) => shapes.filter((shape) => shape.includes(`<a:t>${text}</a:t>`));
+
+    for (const item of ['Erster Punkt', 'Zweiter Punkt', 'Dritter Punkt']) expect(withText(item)).toHaveLength(1);
+    expect(shapes.filter((shape) => shape.includes('prst="ellipse"') && shape.includes('val="F24726"'))).toHaveLength(
+      3
+    );
+    expect(shapes.filter((shape) => shape.includes('val="E5E7EB"') && !shape.includes('<a:t>'))).toHaveLength(3);
+  });
+
+  it('keeps a list whose markers are inline text in one text box', async () => {
+    const shapes = await exportList('', 'content: "– ";');
+    const listShapes = shapes.filter((shape) => shape.includes('Punkt</a:t>'));
+
+    expect(listShapes).toHaveLength(1);
+    expect(listShapes[0]).toContain('<a:t>Dritter Punkt</a:t>');
   });
 });
