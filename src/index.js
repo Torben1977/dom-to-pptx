@@ -1980,6 +1980,27 @@ function getSiblingFloatTextRect(node, style) {
 }
 
 /**
+ * The vertical extent of the frame for an inline element's line. The browser
+ * reports an inline box by its content area -- the font's ascent plus descent,
+ * wrapped in padding and border -- while a text frame lays its line out from
+ * the top of its inset, so the frame has to start where the line does: the
+ * content area shrunk or grown by half the leading on each side (CSS 2.1
+ * §10.8.1). At 36px/42.67px the line starts 2 px below the content area. The
+ * frame keeps padding and border around that line, because the text frame's
+ * inset carries them.
+ */
+function getInlineLineRect(style, rect) {
+  const lineHeight = parseFloat(style.lineHeight);
+  if (style.display !== 'inline' || !Number.isFinite(lineHeight)) return rect;
+  const insetTop = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0);
+  const insetBottom = (parseFloat(style.borderBottomWidth) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const contentHeight = rect.height - insetTop - insetBottom;
+  const top = rect.top + (contentHeight - lineHeight) / 2;
+  const height = lineHeight + insetTop + insetBottom;
+  return { left: rect.left, right: rect.right, width: rect.width, top, bottom: top + height, height };
+}
+
+/**
  * Inline text between block-flow boundaries owns a complete CSS line box even
  * though getBoundingClientRect() only reports the painted glyphs. PowerPoint
  * has no anonymous line box, so use the parent's content width for that one
@@ -2034,9 +2055,7 @@ function getStandaloneInlineLineRect(node, style) {
   if (align === 'right' || align === 'end') left = paddingRight - width;
   else if (align === 'center') left = paddingLeft + (availableWidth - width) / 2;
 
-  const lineHeight = parseFloat(style.lineHeight) || ownRect.height;
-  const height = Math.max(ownRect.height, lineHeight);
-  const top = ownRect.top - Math.max(0, height - ownRect.height) / 2;
+  const { top, height } = getInlineLineRect(style, ownRect);
   return { left, right: left + width, top, bottom: top + height, width, height };
 }
 
@@ -2068,8 +2087,9 @@ function isAutoSizedHorizontalFlexItem(node, style, styleMap = null) {
   }
 }
 
-function getTolerantSingleLineRect(node, style, rect) {
-  if (!node?.parentElement || !isRenderedSingleLine(node)) return rect;
+function getTolerantSingleLineRect(node, style, measuredRect) {
+  if (!node?.parentElement || !isRenderedSingleLine(node)) return measuredRect;
+  const rect = getInlineLineRect(style, measuredRect);
 
   const parent = node.parentElement;
   const parentRect = parent.getBoundingClientRect();
@@ -2109,9 +2129,16 @@ function getTolerantSingleLineRect(node, style, rect) {
   // sits exactly where the author put it. Clamping it inward would move it by
   // the padding, which is how `li::before` markers ended up on top of their
   // own text.
+  //
+  // In flow, the box still never leaves the browser's own line: the clamp only
+  // decides on which side the tolerance goes. Text the browser laid out beyond
+  // the parent's content box -- overflowing a fixed-height box centred with
+  // flex, say -- stays where it was drawn; pulling it inside stacked it onto
+  // its neighbours.
   if (!isOutOfTextFlow(style)) {
-    left = Math.max(contentLeft, Math.min(left, contentRight - width));
-    top = Math.max(contentTop, Math.min(top, contentBottom - height));
+    const within = (value, min, max) => Math.max(min, Math.min(value, max));
+    left = within(within(left, contentLeft, contentRight - width), rect.right - width, rect.left);
+    top = within(within(top, contentTop, contentBottom - height), rect.bottom - height, rect.top);
   }
 
   return { left, right: left + width, top, bottom: top + height, width, height };

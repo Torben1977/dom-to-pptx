@@ -386,4 +386,88 @@ describe('browser single-line fidelity', () => {
     expect(shapeFor(fixedXml, 'fixed painted label')).toContain('wrap="square"');
     expect(shapeFor(stretchedXml, 'stretched painted label')).toContain('wrap="square"');
   }, 40_000);
+
+  // Paragraphs taller than a fixed-height box centred with flex run out of it at
+  // the top and the bottom alike. Pulling the single-line ones back into the
+  // box's content area stacked them onto the paragraph between them.
+  it('keeps single-line text where the browser drew it when it overflows its parent', async () => {
+    const html = `<!doctype html><html><head><style>
+        * { box-sizing: border-box; margin: 0; }
+        .slide { position: relative; width: 1280px; height: 720px; background: white; padding: 64px; }
+        .box { width: 280px; height: 96px; padding: 16px; background: #EEF1F5; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+        .l { font: 700 10pt/14pt Arial; } .h { font: 700 17pt/22pt Arial; } .n { font: 700 26pt/32pt Arial; }
+      </style></head><body><section class="slide"><div class="box"><p class="l">LABEL</p><p class="h">Heading line</p><p class="n">-18 %</p></div></section></body></html>`;
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const xml = await (await JSZip.loadAsync(buffer)).file('ppt/slides/slide1.xml').async('string');
+    const topPx = (text) => Number(shapeFor(xml, text).match(/<a:off x="\d+" y="(\d+)"/)[1]) / (914_400 / 96);
+
+    // The line heights fix the layout: 18.67 + 6 + 29.33 + 6 + 42.67 px in a 64 px
+    // content box from 80 px, centred, so the paragraphs start 19.33 px above it.
+    expect(topPx('LABEL')).toBeCloseTo(60.67, 0);
+    expect(topPx('Heading line')).toBeCloseTo(85.33, 0);
+    expect(topPx('-18 %')).toBeCloseTo(120.67, 0);
+  });
+
+  // The browser reports an inline element by its content area, which a tight
+  // line-height leaves taller than the line. A frame placed at the content area
+  // put the figure 2–3 px above the browser's in Office. Each figure starts the
+  // second line of its block, so the line begins where the label above it ends;
+  // `nowrap` gives it a frame of its own, as in the deck it came from.
+  it('starts the text of an inline element on its line, not at its taller content area', async () => {
+    const html = `<!doctype html><html><head><style>
+        * { box-sizing: border-box; margin: 0; }
+        .slide { position: relative; width: 1280px; height: 720px; background: white; padding: 64px; font: 16px Arial, sans-serif; }
+        .range { width: 240px; margin-bottom: 60px; } .range span { display: block; font-size: 13px; line-height: 18px; }
+        .range strong { font: 700 36px/30px Arial, sans-serif; white-space: nowrap; } .padded strong { padding: 10px 0; }
+      </style></head><body><section class="slide">
+        <div class="range"><span>Potenzial pro Jahr</span><strong>5–7 Mio. €</strong></div>
+        <div class="range padded"><span>Mit Innenabstand</span><strong>8–9 Mio. €</strong></div>
+      </section></body></html>`;
+
+    const { default: puppeteer } = await import('puppeteer');
+    const browser = await puppeteer.launch({
+      executablePath: await puppeteer.executablePath(),
+      headless: true,
+      args: ['--no-sandbox'],
+    });
+    let measured;
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 720 });
+      await page.setContent(html);
+      measured = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.range'), (range) => ({
+          lineTop: range.querySelector('span').getBoundingClientRect().bottom,
+          contentAreaTop: range.querySelector('strong').getBoundingClientRect().top,
+        }))
+      );
+    } finally {
+      await browser.close();
+    }
+
+    const buffer = await exportHtmlToPptx(html, {
+      selector: '.slide',
+      pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
+    });
+    const xml = await (await JSZip.loadAsync(buffer)).file('ppt/slides/slide1.xml').async('string');
+    const EMU_PER_PX = 914_400 / 96;
+    // Where Office starts the text: the frame's top plus its top inset.
+    const textTop = (text) => {
+      const shape = shapeFor(xml, text);
+      return (
+        (Number(shape.match(/<a:off x="\d+" y="(\d+)"/)[1]) + Number(shape.match(/tIns="(\d+)"/)?.[1] ?? 0)) /
+        EMU_PER_PX
+      );
+    };
+    const [plain, padded] = measured;
+
+    expect(plain.lineTop - plain.contentAreaTop).toBeGreaterThan(3);
+    expect(Math.abs(textTop('5–7 Mio. €') - plain.lineTop)).toBeLessThanOrEqual(1);
+    // Padding does not move an inline element's line; the inset has to land on it.
+    expect(Math.abs(textTop('8–9 Mio. €') - padded.lineTop)).toBeLessThanOrEqual(1);
+  });
 });
