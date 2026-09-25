@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
 import { exportHtmlToPptx } from '../node-exporter.js';
+import { convertToPdf } from './helpers/office-fidelity.js';
 
 let browser;
 let page;
@@ -219,19 +219,7 @@ describe('image codec fidelity through HTML and PPTX', () => {
       const dir = mkdtempSync(path.join(tmpdir(), 'dom-to-pptx-image-codecs-'));
       try {
         writeFileSync(path.join(dir, 'images.pptx'), pptxBuffer);
-        execFileSync(
-          'soffice',
-          [
-            `-env:UserInstallation=${pathToFileURL(path.join(dir, 'profile')).href}`,
-            '--headless',
-            '--convert-to',
-            'pdf',
-            '--outdir',
-            dir,
-            path.join(dir, 'images.pptx'),
-          ],
-          { stdio: 'pipe' }
-        );
+        convertToPdf(path.join(dir, 'images.pptx'), dir, path.join(dir, 'profile'));
         const sample = async (slide, points) => {
           const prefix = path.join(dir, `slide-${slide}`);
           execFileSync(

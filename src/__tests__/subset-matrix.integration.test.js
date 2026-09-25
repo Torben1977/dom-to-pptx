@@ -10,6 +10,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { exportHtmlToPptx } from '../node-exporter.js';
 import {
+  convertToPdf,
   EMU_PER_PT,
   PX_TO_PT,
   X_TOLERANCE_PT,
@@ -25,7 +26,9 @@ import {
 // production adapter. A construct belongs in the subset only if its probe is
 // clean here. Every probe is compared three ways:
 //   text     — where Office puts its words against the browser (helpers/office-fidelity.js)
-//   paint    — the probe's box in the Office rendering against the browser screenshot
+//   paint    — the probe's box, and the box of every element in it that paints
+//              (fill, border, shadow, picture), in the Office rendering against the
+//              browser screenshot
 //   pictures — a probe without an image of its own must stay native, not become a picture
 
 const runOfficeRoundtrip = process.env.DOM_TO_PPTX_OFFICE_ROUNDTRIP === '1';
@@ -42,7 +45,9 @@ const PROBE_IDS = [
 // BLOCK_COLOUR_LIMIT from every Office block within the text tolerances
 // (X_TOLERANCE_PT, Y_TOLERANCE_PT). Where things sit is the text check's call;
 // this one asks whether the paint is there — a lost fill or colour matches at no
-// offset, a shifted line of text matches at one.
+// offset, a shifted line of text matches at one. The share is taken per painted
+// element as well as over the probe: a triangle drawn as a rectangle differs in a
+// third of its own box but in a few per cent of the probe around it.
 const BLOCK_PX = 8;
 const BLOCK_COLOUR_LIMIT = 48;
 const PAINT_DIFFERING_BLOCKS_LIMIT = 0.08;
@@ -54,7 +59,11 @@ const PICTURE_COVER_LIMIT = 0.5;
 // Defect kinds per probe today. A clean probe is absent; an entry means the
 // construct is not faithful yet and must be fixed here or leave the subset.
 // Keep the kinds, not the measured numbers: those vary with fonts and builds.
-const KNOWN_DEFECTS = {};
+const KNOWN_DEFECTS = {
+  // Borders meeting at a zero-size box draw a triangle in the browser; PowerPoint
+  // gets the box's rectangle in the visible border's colour.
+  'shape:css-triangle': ['paint'],
+};
 
 let outputDir;
 let browserPages;
@@ -157,7 +166,7 @@ async function comparePaint(executablePath, browserShots, officeShots, boxesPerS
                   if (!matchesNearby(x, y)) differing += 1;
                 }
               }
-              return { probe: box.name, differingShare: total ? differing / total : 0 };
+              return { probe: box.name, element: box.element, differingShare: total ? differing / total : 0 };
             });
           },
           {
@@ -232,19 +241,7 @@ officeDescribe('Fidelity matrix of the closed slide subset', () => {
       browserPages.map((_, index) => zip.file(`ppt/slides/slide${index + 1}.xml`).async('string'))
     );
     slideXmlAll = slideXml;
-    execFileSync(
-      'soffice',
-      [
-        `-env:UserInstallation=${pathToFileURL(path.join(outputDir, 'libreoffice-profile')).href}`,
-        '--headless',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        outputDir,
-        pptxPath,
-      ],
-      { stdio: 'pipe' }
-    );
+    convertToPdf(pptxPath, outputDir);
     execFileSync('pdftotext', ['-bbox', pdfPath, path.join(outputDir, 'words.html')], { stdio: 'pipe' });
     const officePages = parseOfficeWords(readFileSync(path.join(outputDir, 'words.html'), 'utf8'));
     execFileSync(
@@ -286,26 +283,34 @@ officeDescribe('Fidelity matrix of the closed slide subset', () => {
     });
 
     const toPx = (pt) => pt / PX_TO_PT;
+    const pxBox = (name, element, box) => ({
+      name,
+      element,
+      left: toPx(box.left),
+      right: toPx(box.right),
+      top: toPx(box.top),
+      bottom: toPx(box.bottom),
+    });
     const boxesPerSlide = browserPages.map((page) =>
-      page.probes.map((probe) => ({
-        name: probe.name,
-        left: toPx(probe.left),
-        right: toPx(probe.right),
-        top: toPx(probe.top),
-        bottom: toPx(probe.bottom),
-      }))
+      page.probes.flatMap((probe) => [
+        pxBox(probe.name, null, probe),
+        ...probe.painted.map((rect) => pxBox(probe.name, rect.label, rect)),
+      ])
     );
-    for (const { probe, differingShare } of await comparePaint(
+    for (const { probe, element, differingShare } of await comparePaint(
       executablePath,
       browserShots,
       officeShots,
       boxesPerSlide
     )) {
-      metricsByProbe.set(probe, { ...(metricsByProbe.get(probe) ?? {}), differingShare });
+      const metrics = metricsByProbe.get(probe) ?? {};
+      if (element === null) metricsByProbe.set(probe, { ...metrics, differingShare });
+      else metricsByProbe.set(probe, { ...metrics, elements: { ...metrics.elements, [element]: differingShare } });
       if (differingShare > PAINT_DIFFERING_BLOCKS_LIMIT) {
+        const where = element === null ? 'the box' : `the box of ${element}`;
         findingsByProbe
           .get(probe)
-          ?.push({ probe, kind: 'paint', detail: `${(differingShare * 100).toFixed(1)} % of the box differs` });
+          ?.push({ probe, kind: 'paint', detail: `${(differingShare * 100).toFixed(1)} % of ${where} differs` });
       }
     }
 

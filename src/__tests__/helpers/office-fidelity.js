@@ -1,4 +1,9 @@
 import puppeteer from 'puppeteer';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 // Measures where every word and every probe box lies in the browser and where
@@ -10,8 +15,57 @@ export const X_TOLERANCE_PT = 3;
 export const Y_TOLERANCE_PT = 4;
 export const SPACING_TOLERANCE_PT = 1;
 export const EMU_PER_PT = 12700;
+// Office may set a line this much narrower than the browser before a word it pulls
+// up counts: LibreOffice lays Arial out 0.55 % narrower than its design widths,
+// which Chrome keeps (measured 2026-09-25, same font file on both sides).
+export const REWRAP_TOLERANCE = 0.01;
 
 export const normalize = (word) => word.toLocaleLowerCase('de');
+
+// Headless LibreOffice on macOS finds its fonts through the fontconfig it ships,
+// which knows only the fonts bundled with it: Arial became Liberation Sans and
+// Helvetica Linux Libertine, so every comparison measured a substitute against
+// the browser's real font. Pointing fontconfig at the system's font directories
+// gives Office the fonts the browser used.
+const MACOS_FONT_DIRS = [
+  '/System/Library/Fonts',
+  '/System/Library/Fonts/Supplemental',
+  '/Library/Fonts',
+  path.join(os.homedir(), 'Library/Fonts'),
+];
+
+/** Converts a PPTX to PDF with LibreOffice in a profile of its own, using the fonts the browser has. */
+export function convertToPdf(pptxPath, outputDir, profilePath = path.join(outputDir, 'libreoffice-profile')) {
+  const env = { ...process.env };
+  if (process.platform === 'darwin') {
+    const config = path.join(outputDir, 'fonts.conf');
+    writeFileSync(
+      config,
+      [
+        '<?xml version="1.0"?>',
+        '<fontconfig>',
+        ...MACOS_FONT_DIRS.map((dir) => `  <dir>${dir}</dir>`),
+        `  <cachedir>${path.join(outputDir, 'fontconfig-cache')}</cachedir>`,
+        '</fontconfig>',
+        '',
+      ].join('\n')
+    );
+    env.FONTCONFIG_FILE = config;
+  }
+  execFileSync(
+    'soffice',
+    [
+      `-env:UserInstallation=${pathToFileURL(profilePath).href}`,
+      '--headless',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      outputDir,
+      pptxPath,
+    ],
+    { stdio: 'pipe', env }
+  );
+}
 
 export function groupLines(words) {
   const sorted = [...words].sort((a, b) => (a.top + a.bottom) / 2 - (b.top + b.bottom) / 2 || a.x - b.x);
@@ -39,10 +93,28 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
       Array.from(document.querySelectorAll('.slide'), (slide) => {
         const origin = slide.getBoundingClientRect();
         const words = [];
+        // The block a word's lines break in, and the content box they break against.
+        const blocks = new Map();
+        const blockOf = (element) => {
+          let block = element;
+          while (block !== slide && getComputedStyle(block).display.startsWith('inline')) block = block.parentElement;
+          if (!blocks.has(block)) {
+            const rect = block.getBoundingClientRect();
+            const style = getComputedStyle(block);
+            blocks.set(block, {
+              block: blocks.size,
+              blockLeft: rect.left - origin.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft),
+              blockRight:
+                rect.right - origin.left - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight),
+            });
+          }
+          return blocks.get(block);
+        };
         const walker = document.createTreeWalker(slide, NodeFilter.SHOW_TEXT);
         let node;
         while ((node = walker.nextNode())) {
           const probe = node.parentElement.closest('[data-probe]')?.dataset.probe ?? null;
+          const block = blockOf(node.parentElement);
           const pattern = /\S+/g;
           let match;
           while ((match = pattern.exec(node.textContent))) {
@@ -54,6 +126,7 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
             words.push({
               text: match[0],
               probe,
+              ...block,
               x: rect.left - origin.left,
               xMax: rect.right - origin.left,
               top: rect.top - origin.top,
@@ -66,8 +139,46 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
           ...(slide.matches('[data-probe]') ? [slide] : []),
           ...slide.querySelectorAll('[data-probe]'),
         ];
+        // Every element of a probe that puts paint on the slide itself — a fill, a
+        // visible border side, a shadow, a picture. Each is compared in its own box,
+        // so a small shape is not diluted by the probe's empty space.
+        const visible = (color) => {
+          const alpha = color.match(/rgba?\([^)]*[,/]\s*([\d.]+%?)\s*\)/);
+          return color !== 'transparent' && (!alpha || parseFloat(alpha[1]) > 0);
+        };
+        const paints = (element) => {
+          const style = getComputedStyle(element);
+          if (style.visibility === 'hidden') return false;
+          if (element.matches('img, svg')) return true;
+          return (
+            visible(style.backgroundColor) ||
+            style.backgroundImage !== 'none' ||
+            style.boxShadow !== 'none' ||
+            ['Top', 'Right', 'Bottom', 'Left'].some(
+              (side) =>
+                parseFloat(style[`border${side}Width`]) > 0 &&
+                style[`border${side}Style`] !== 'none' &&
+                visible(style[`border${side}Color`])
+            )
+          );
+        };
+        const labelOf = (element) =>
+          element.tagName.toLowerCase() + (element.dataset.semanticId ? `[${element.dataset.semanticId}]` : '');
         const probes = probeElements.map((element) => {
           const box = element.getBoundingClientRect();
+          const painted = [element, ...element.querySelectorAll('*')]
+            .filter((candidate) => !candidate.parentElement?.closest('svg') && paints(candidate))
+            .map((candidate, index) => {
+              const rect = candidate.getBoundingClientRect();
+              return {
+                label: `${index + 1}:${labelOf(candidate)}`,
+                top: rect.top - origin.top,
+                bottom: rect.bottom - origin.top,
+                left: rect.left - origin.left,
+                right: rect.right - origin.left,
+              };
+            })
+            .filter((rect) => rect.right > rect.left && rect.bottom > rect.top);
           const style = getComputedStyle(element);
           const contentTop = box.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop);
           const contentBottom = box.bottom - parseFloat(style.borderBottomWidth) - parseFloat(style.paddingBottom);
@@ -94,6 +205,7 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
             // has a fixed height, so its leftover space is not paragraph spacing.
             leadingSpace: element === slide ? null : first ? first.top - contentTop : 0,
             trailingSpace: element === slide ? null : last ? contentBottom - last.bottom : 0,
+            painted,
           };
         });
         return { words, probes };
@@ -106,6 +218,8 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
     const measured = pages.map((page) => ({
       words: page.words.map((word) => ({
         ...word,
+        blockLeft: toPt(word.blockLeft),
+        blockRight: toPt(word.blockRight),
         x: toPt(word.x),
         xMax: toPt(word.xMax),
         top: toPt(word.top),
@@ -119,6 +233,13 @@ export async function measureBrowserPages(executablePath, fixture, canvas) {
         right: toPt(probe.right),
         leadingSpace: probe.leadingSpace === null ? null : toPt(probe.leadingSpace),
         trailingSpace: probe.trailingSpace === null ? null : toPt(probe.trailingSpace),
+        painted: probe.painted.map((rect) => ({
+          ...rect,
+          top: toPt(rect.top),
+          bottom: toPt(rect.bottom),
+          left: toPt(rect.left),
+          right: toPt(rect.right),
+        })),
       })),
     }));
     return { pages: measured, slideIds };
@@ -185,8 +306,51 @@ export function textFrameParagraphs(xml, marker) {
 }
 
 /**
+ * The first line break per text block where Office parts from the browser; the
+ * later ones in the block follow from it. Office adding a break is always one. A
+ * word Office pulls up to the line before is one unless the browser broke there
+ * for width alone and missed by no more than REWRAP_TOLERANCE of the line — then
+ * it is the narrower metrics of the Office renderer, not the converter.
+ * Compared on the paired words only: a lost word is `missing-word`'s finding.
+ */
+function rewrapDetails(pairs) {
+  const details = [];
+  const byBlock = new Map();
+  for (const word of pairs) byBlock.set(word.browser.block, [...(byBlock.get(word.browser.block) ?? []), word]);
+  const opens = (lines) => new Set(lines.map((line) => line.words[0].browserIndex));
+  for (const words of byBlock.values()) {
+    const inBrowser = opens(groupLines(words.map((word) => ({ ...word.browser, browserIndex: word.browserIndex }))));
+    const inOffice = opens(groupLines(words));
+    const ordered = [...words].sort((a, b) => a.browserIndex - b.browserIndex);
+    const index = ordered.findIndex((word) => inBrowser.has(word.browserIndex) !== inOffice.has(word.browserIndex));
+    if (index < 1) continue;
+    const [previous, word] = [ordered[index - 1], ordered[index]];
+    if (inOffice.has(word.browserIndex)) {
+      details.push(`Office breaks the line before "${word.text}", the browser does not`);
+      continue;
+    }
+    const gaps = ordered
+      .slice(1)
+      .map((next, position) => [ordered[position], next])
+      .filter(([left, right]) => !inBrowser.has(right.browserIndex) && right.browser.x > left.browser.xMax)
+      .map(([left, right]) => right.browser.x - left.browser.xMax)
+      .sort((a, b) => a - b);
+    const gap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.25 * (word.browser.bottom - word.browser.top);
+    const width = word.browser.blockRight - word.browser.blockLeft;
+    const missing = previous.browser.xMax + gap + (word.browser.xMax - word.browser.x) - word.browser.blockRight;
+    if (missing > -gap / 2 && missing <= REWRAP_TOLERANCE * width) continue;
+    details.push(
+      `Office pulls "${word.text}" up to the line before; the browser line lacked ${missing.toFixed(1)} pt of ${width.toFixed(0)} pt`
+    );
+  }
+  return details;
+}
+
+/**
  * Differences a reader would see between the browser and Office, as
- * `{ probe, kind, detail }`. Wrapping at a different word is not one by itself.
+ * `{ probe, kind, detail }`. Office has to break every line where the browser
+ * broke it: a line more or less changes the height of the text and says the
+ * box's width did not carry over.
  */
 export function analyzePage(browserPage, officeWords, xml, rasterized = {}) {
   const findings = [];
@@ -231,6 +395,7 @@ export function analyzePage(browserPage, officeWords, xml, rasterized = {}) {
       .filter(({ word, index }) => word.probe === probe.name && officeFor.has(index))
       .map(({ word, index }) => ({
         ...officeWords[officeFor.get(index)],
+        browserIndex: index,
         browser: word,
         line: browserLineOf.get(index),
       }));
@@ -257,6 +422,8 @@ export function analyzePage(browserPage, officeWords, xml, rasterized = {}) {
         add(probe.name, 'stranded', `"${first.text}" stands alone on its line`);
       }
     }
+
+    for (const detail of rewrapDetails(pairs)) add(probe.name, 'rewrap', detail);
 
     const offsets = [];
     for (const browserLine of new Set(pairs.map((word) => word.line.lineIndex))) {

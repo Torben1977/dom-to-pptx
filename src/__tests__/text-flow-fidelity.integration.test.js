@@ -6,9 +6,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
 import { exportHtmlToPptx } from '../node-exporter.js';
 import {
+  convertToPdf,
   EMU_PER_PT,
   X_TOLERANCE_PT,
   Y_TOLERANCE_PT,
@@ -41,16 +41,19 @@ const KNOWN_DEFECTS = {
   // A negative text-indent travels as marL/indent with no marker. Faithful today.
   'hanging-indent': [],
   // The adapter materializes an inline `::before` as an inline span again, so it
-  // joins the paragraph's run instead of getting a text box of its own.
-  'inline-lead': [],
+  // joins the paragraph's run instead of getting a text box of its own. The
+  // paragraph shares one text box with the heading, as wide as the slide, and
+  // loses its own 560 px: Office pulls up words the browser wrapped.
+  'inline-lead': ['rewrap'],
   'stacked-divs': [],
   // Row heights travel from the measured layout and the cell margins are the
   // CSS padding, nothing added. Faithful today.
   'table-cells': [],
   'table-below': [],
   // A span shifted with `position: relative` stays in the run on purpose: the
-  // alternative is one box per fragment, which overlaps. Faithful today.
-  'relative-offset': [],
+  // alternative is one box per fragment, which overlaps. The paragraph loses its
+  // 560 px in the slide-wide text box, as in `inline-lead`.
+  'relative-offset': ['rewrap'],
 };
 
 // Probes the converter is expected to hand over as a picture instead of text,
@@ -113,19 +116,7 @@ officeDescribe('Office text flow fidelity against the browser layout', () => {
     slideXml = await Promise.all(
       browserPages.map((_, index) => zip.file(`ppt/slides/slide${index + 1}.xml`).async('string'))
     );
-    execFileSync(
-      'soffice',
-      [
-        `-env:UserInstallation=${pathToFileURL(path.join(outputDir, 'libreoffice-profile')).href}`,
-        '--headless',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        outputDir,
-        pptxPath,
-      ],
-      { stdio: 'pipe' }
-    );
+    convertToPdf(pptxPath, outputDir);
     execFileSync('pdftotext', ['-bbox', pdfPath, bboxPath], { stdio: 'pipe' });
     officePages = parseOfficeWords(readFileSync(bboxPath, 'utf8'));
 

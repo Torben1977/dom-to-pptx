@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
 import { exportHtmlToPptx } from '../node-exporter.js';
+import { convertToPdf } from './helpers/office-fidelity.js';
 
 const runOfficeRoundtrip = process.env.DOM_TO_PPTX_OFFICE_ROUNDTRIP === '1';
 const officeDescribe = runOfficeRoundtrip ? describe : describe.skip;
@@ -106,19 +106,7 @@ officeDescribe('LibreOffice visual round trip', () => {
     });
     writeFileSync(pptxPath, buffer);
 
-    execFileSync(
-      'soffice',
-      [
-        `-env:UserInstallation=${pathToFileURL(profilePath).href}`,
-        '--headless',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        outputDir,
-        pptxPath,
-      ],
-      { stdio: 'pipe' }
-    );
+    convertToPdf(pptxPath, outputDir, profilePath);
     execFileSync('pdftotext', ['-bbox-layout', pdfPath, bboxPath], { stdio: 'pipe' });
     execFileSync('pdftoppm', ['-f', '6', '-l', '6', '-singlefile', '-r', '96', pdfPath, shadowRasterPrefix], {
       stdio: 'pipe',
