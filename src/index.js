@@ -705,7 +705,11 @@ async function elementToCanvasImage(node, widthPx, heightPx, captureOptions = {}
       y: -padding,
       onclone: (clonedDoc) => {
         const clonedNode = clonedDoc.getElementById(tempId);
-        if (clonedNode) {
+        // Everything below keeps an icon glyph whole. A fidelity capture of an
+        // overflow boundary has to show the subtree as the browser laid it out:
+        // the icon treatment set a clipped source line, a <span>, centred and in
+        // the FontAwesome fallback face -- a serif.
+        if (clonedNode && !preserveOverflow) {
           // --- FIX: CLIP & FONT ISSUES ---
           // Apply styles DIRECTLY to elements to ensure html2canvas picks them up
           // This avoids issues where <style> tags in onclone are ignored or delayed
@@ -722,9 +726,8 @@ async function elementToCanvasImage(node, widthPx, heightPx, captureOptions = {}
             img.style.setProperty('display', 'inline-block', 'important');
           });
 
-          // 3. Icon captures include glyph bleed. Fidelity captures of an
-          // overflow boundary must retain the authored clip instead.
-          if (!preserveOverflow) clonedNode.style.overflow = 'visible';
+          // 3. Icon captures include glyph bleed.
+          clonedNode.style.overflow = 'visible';
 
           // 4. Adjust alignment for Icons to prevent baseline clipping
           // (Applies to <i>, <span>, or standard icon classes)
