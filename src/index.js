@@ -3239,7 +3239,13 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
 
   // A wrapped frame gets the reserve the browser's own breaks allow (see
   // measureWrapReservePx): out of the inset on the side the text grows towards,
-  // and beyond it only for a frame that paints nothing, whose box may grow.
+  // and beyond it only for a text frame that paints nothing itself. A border that
+  // differs between sides is drawn by shapes of its own and keeps x/w; only the
+  // text frame (textX/textW) grows.
+  let textX = x;
+  let textW = w;
+  const frameCarriesPaint =
+    (bgColorObj.hex && bgColorObj.opacity > 0) || hasGradient || hasBgImgUrl || hasUniformBorder || hasShadow;
   if (
     textPayload?.wrap &&
     rotation === 0 &&
@@ -3253,22 +3259,23 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
     const grow = (side, amountPt) => {
       const fromInset = Math.min(textPayload.margin[side], amountPt);
       textPayload.margin[side] -= fromInset;
-      return hasOwnPaint ? 0 : (amountPt - fromInset) / 72;
+      return frameCarriesPaint ? 0 : (amountPt - fromInset) / 72;
     };
     if (reservePt > 0 && leftInset !== undefined && rightInset !== undefined) {
       if (textPayload.align === 'center') {
         const [left, right] = [grow(0, reservePt / 2), grow(1, reservePt / 2)];
-        x -= left;
-        w += left + right;
+        textX -= left;
+        textW += left + right;
       } else if (textPayload.align === 'right') {
         const left = grow(0, reservePt);
-        x -= left;
-        w += left;
+        textX -= left;
+        textW += left;
       } else {
-        w += grow(1, reservePt);
+        textW += grow(1, reservePt);
       }
     }
   }
+  const grownTextFrame = textX !== x || textW !== w ? { x: textX, w: textW } : {};
 
   // A solid, empty box can be clipped by shrinking its editable rectangle.
   // Media and text require crop/mask semantics rather than resizing, and are
@@ -3413,6 +3420,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           y,
           w,
           h,
+          ...grownTextFrame,
           align: textPayload.align,
           valign: textPayload.valign,
           rotate: rotation,
@@ -3501,6 +3509,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             y,
             w,
             h,
+            ...grownTextFrame,
             rotate: rotation,
             align: textPayload.align,
             valign: textPayload.valign,
@@ -3586,6 +3595,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
             y,
             w,
             h,
+            ...grownTextFrame,
             rotate: rotation,
             align: textPayload.align,
             valign: textPayload.valign,
@@ -3603,6 +3613,7 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
         const textOptions = {
           shape: shapeType,
           ...shapeOpts,
+          ...grownTextFrame,
           rotate: rotation,
           align: textPayload.align,
           valign: textPayload.valign,

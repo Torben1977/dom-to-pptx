@@ -61,6 +61,23 @@ describe('wrap reserve of multi-line text frames', () => {
     expect(width - 360).toBeLessThan(1);
   });
 
+  it('grows the text frame of an accent-lined heading and leaves its line as painted', async () => {
+    // A top border alone is drawn by a shape of its own, so the text frame may grow. The box
+    // is exactly as wide as its word, as a grid column the heading fills.
+    const browserWidth = Math.ceil(await widthOf('Wohnberechtigung'));
+    const xml = await exportSlide(
+      `<p class="text" style="top: 440px; width: ${browserWidth}px; border-top: 2px solid #096E66; padding-top: 12px">` +
+        'Wohnberechtigung</p>'
+    );
+
+    const { width } = geometry(shapeFor(xml, 'Wohnberechtigung'));
+    const line = Array.from(xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g), (match) => match[0]).find((shape) =>
+      shape.includes('<a:srgbClr val="096E66"/>')
+    );
+    expect(width - browserWidth).toBeCloseTo(8, 0);
+    expect(geometry(line).width).toBeCloseTo(browserWidth, 0);
+  });
+
   it('takes the reserve of a filled card out of its inset and leaves the card as painted', async () => {
     const xml = await exportSlide(
       '<p class="text" style="top: 320px; width: min-content; padding: 10px 12px; background: #eef2ff">' +
