@@ -45,16 +45,17 @@ async function browserBaselines(html) {
     return await page.evaluate(() =>
       Object.fromEntries(
         Array.from(document.querySelectorAll('.text'), (element) => {
-          // Without a wrap opportunity the marker stays on the line even where
-          // the text is wider than its box.
-          const whiteSpace = element.style.whiteSpace;
-          element.style.whiteSpace = 'nowrap';
+          // Measured on a copy as wide as its text, which gives a line the same
+          // baseline and leaves the marker no reason to break onto a line of its
+          // own, as it would behind a word wider than its box.
+          const copy = element.cloneNode(true);
+          copy.style.width = 'max-content';
+          element.after(copy);
           const marker = document.createElement('span');
           marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
-          element.appendChild(marker);
+          copy.appendChild(marker);
           const baseline = marker.getBoundingClientRect().bottom;
-          marker.remove();
-          element.style.whiteSpace = whiteSpace;
+          copy.remove();
           return [element.textContent.trim(), { baseline, fontPx: parseFloat(getComputedStyle(element).fontSize) }];
         })
       )
