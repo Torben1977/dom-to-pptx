@@ -621,7 +621,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null) {
     const order = domOrderCounter++;
 
-    let currentSortKey = parentContextKey;
+    let currentSortKey;
     let childContextKey = parentContextKey;
     let currentOpacity = parentOpacity;
     let nodeStyle = null;
@@ -652,6 +652,11 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
       }
       currentSortKey = parentContextKey.concat([zVal, order]);
       if (establishesContext) childContextKey = currentSortKey;
+    } else {
+      // A text node takes its tree slot like an element without z-index: above
+      // its parent's background, below the siblings that follow. The bare
+      // context key would sort it beneath every element of the context.
+      currentSortKey = parentContextKey.concat([0, order]);
     }
 
     // Prepare the item. If it needs async work, it returns a 'job'
