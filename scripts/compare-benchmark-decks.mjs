@@ -9,6 +9,11 @@
 // Each run folder must hold presentation/deck.html, the adapter output the
 // converter gets in production. Needs soffice and pdftotext on the PATH.
 //
+// --renderer powerpoint renders with Microsoft PowerPoint instead of LibreOffice
+// (macOS; the terminal app needs the Automation permission for PowerPoint). It
+// opens one deck at a time in PowerPoint, exports it as PDF and closes it
+// unsaved; open presentations are left alone.
+//
 // Per slide it reports three things:
 //   - XML changes between the builds: text frame geometry and insets, table cell
 //     fills and margins, row heights;
@@ -16,6 +21,7 @@
 //   - per word, how far Office puts it from the browser, relative to the slide's
 //     median offset, summed over the words whose position changed.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
@@ -44,6 +50,53 @@ for (const required of ['base', 'fix', 'runs', 'out']) {
   }
 }
 const concurrency = Number(args.concurrency || 3);
+if (!['libreoffice', 'powerpoint'].includes(args.renderer || 'libreoffice')) {
+  console.error(`--renderer must be libreoffice or powerpoint, not ${args.renderer}`);
+  process.exit(2);
+}
+
+// PowerPoint is one application, so its conversions queue up; PowerPoint is
+// sandboxed and reads and writes only inside its own container.
+const POWERPOINT_DIR = path.join(
+  os.homedir(),
+  'Library/Containers/com.microsoft.Powerpoint/Data/Documents/dom-to-pptx-compare'
+);
+let powerPointQueue = Promise.resolve();
+function convertWithPowerPoint(pptxPath, outDir) {
+  const convert = () => {
+    fs.mkdirSync(POWERPOINT_DIR, { recursive: true });
+    const name = `${path.basename(path.dirname(outDir))}-${path.basename(outDir)}.pptx`.replace(/[^\w.-]/g, '_');
+    const source = path.join(POWERPOINT_DIR, name);
+    const pdf = source.replace(/\.pptx$/, '.pdf');
+    fs.copyFileSync(pptxPath, source);
+    try {
+      execFileSync('osascript', [
+        '-e',
+        [
+          'tell application "Microsoft PowerPoint"',
+          `  open POSIX file "${source}"`,
+          '  repeat 100 times',
+          `    if exists presentation "${name}" then exit repeat`,
+          '    delay 0.2',
+          '  end repeat',
+          `  set p to presentation "${name}"`,
+          `  save p in POSIX file "${pdf}" as save as PDF`,
+          '  close p saving no',
+          'end tell',
+        ].join('\n'),
+      ]);
+      fs.copyFileSync(pdf, path.join(outDir, 'deck.pdf'));
+    } finally {
+      fs.rmSync(source, { force: true });
+      fs.rmSync(pdf, { force: true });
+    }
+  };
+  const done = powerPointQueue.then(convert);
+  powerPointQueue = done.catch(() => {});
+  return done;
+}
+const render = (pptxPath, outDir) =>
+  args.renderer === 'powerpoint' ? convertWithPowerPoint(pptxPath, outDir) : convertToPdf(pptxPath, outDir);
 const CANVAS = { width: 1280, height: 720 };
 const VARIANTS = ['base', 'fix'];
 const exporters = Object.fromEntries(
@@ -110,6 +163,10 @@ function xmlChanges(base, fix) {
   return changes;
 }
 
+// A finding without its numbers: the same drift, a few points smaller, is the
+// same finding; how far things moved is what the word deviations measure.
+const findingKey = (finding) => finding.replace(/-?\d+(\.\d+)?/g, '#');
+
 // Per word, Office position minus browser position, less the slide's median.
 function wordDeviations(browserWords, officeWords) {
   const pairs = assignWords(browserWords, officeWords);
@@ -156,7 +213,7 @@ async function compareRun(run) {
     const xml = await Promise.all(
       pages.map((_, index) => zip.file(`ppt/slides/slide${index + 1}.xml`).async('string'))
     );
-    convertToPdf(pptxPath, variantDir);
+    await render(pptxPath, variantDir);
     const bboxPath = path.join(variantDir, 'deck.bbox.html');
     execFileSync('pdftotext', ['-bbox', path.join(variantDir, 'deck.pdf'), bboxPath], { stdio: 'pipe' });
     const office = parseOfficeWords(fs.readFileSync(bboxPath, 'utf8'));
@@ -176,13 +233,14 @@ async function compareRun(run) {
           ? Math.abs(before.dy - after.dy) > 0.3 || Math.abs(before.dx - after.dx) > 0.3
           : before !== after
       );
+    const [baseKeys, fixKeys] = [base, fix].map((variant) => new Set(variant.findings.map(findingKey)));
     const sum = (key) =>
       moved.reduce((total, word) => total + (word[key] ? Math.abs(word[key].dy) + Math.abs(word[key].dx) : 0), 0);
     return {
       slide: index + 1,
       xmlChanges: xmlChanges(base.xml, fix.xml),
-      findingsGone: base.findings.filter((finding) => !fix.findings.includes(finding)),
-      findingsAdded: fix.findings.filter((finding) => !base.findings.includes(finding)),
+      findingsGone: base.findings.filter((finding) => !fixKeys.has(findingKey(finding))),
+      findingsAdded: fix.findings.filter((finding) => !baseKeys.has(findingKey(finding))),
       movedWords: moved.length,
       wordsLost: moved.filter((word) => word.base && !word.fix).map((word) => word.word),
       wordsFound: moved.filter((word) => !word.base && word.fix).map((word) => word.word),
