@@ -62,30 +62,44 @@ const POWERPOINT_DIR = path.join(
   'Library/Containers/com.microsoft.Powerpoint/Data/Documents/dom-to-pptx-compare'
 );
 let powerPointQueue = Promise.resolve();
+// A PowerPoint that stops answering (a dialog waiting for the user, say) stays
+// stuck; everything after it would pile up behind it. The first timeout ends
+// all further conversions instead.
+let powerPointStuck = false;
 function convertWithPowerPoint(pptxPath, outDir) {
   const convert = () => {
+    if (powerPointStuck) throw new Error('PowerPoint stopped answering earlier in this run; not converting');
     fs.mkdirSync(POWERPOINT_DIR, { recursive: true });
     const name = `${path.basename(path.dirname(outDir))}-${path.basename(outDir)}.pptx`.replace(/[^\w.-]/g, '_');
     const source = path.join(POWERPOINT_DIR, name);
     const pdf = source.replace(/\.pptx$/, '.pdf');
     fs.copyFileSync(pptxPath, source);
     try {
-      execFileSync('osascript', [
-        '-e',
+      execFileSync(
+        'osascript',
         [
-          'tell application "Microsoft PowerPoint"',
-          `  open POSIX file "${source}"`,
-          '  repeat 100 times',
-          `    if exists presentation "${name}" then exit repeat`,
-          '    delay 0.2',
-          '  end repeat',
-          `  set p to presentation "${name}"`,
-          `  save p in POSIX file "${pdf}" as save as PDF`,
-          '  close p saving no',
-          'end tell',
-        ].join('\n'),
-      ]);
+          '-e',
+          [
+            'with timeout of 90 seconds',
+            'tell application "Microsoft PowerPoint"',
+            `  open POSIX file "${source}"`,
+            '  repeat 100 times',
+            `    if exists presentation "${name}" then exit repeat`,
+            '    delay 0.2',
+            '  end repeat',
+            `  set p to presentation "${name}"`,
+            `  save p in POSIX file "${pdf}" as save as PDF`,
+            '  close p saving no',
+            'end tell',
+            'end timeout',
+          ].join('\n'),
+        ],
+        { timeout: 120_000 }
+      );
       fs.copyFileSync(pdf, path.join(outDir, 'deck.pdf'));
+    } catch (error) {
+      if (error.code === 'ETIMEDOUT' || /-1712/.test(String(error.stderr || error.message))) powerPointStuck = true;
+      throw error;
     } finally {
       fs.rmSync(source, { force: true });
       fs.rmSync(pdf, { force: true });
