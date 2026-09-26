@@ -23,7 +23,8 @@
 //     converter places them by different rules, and a fix to one can hide in the
 //     sum of both;
 //   - text frames an opaque shape or picture painted after them covers. pdftotext
-//     finds covered text all the same, so no word measurement notices it.
+//     finds covered text all the same, so no word measurement notices it. A
+//     picture covers where its own pixels are opaque, sampled in a browser.
 //
 // The summary adds, over all slides, each build's mean offset per word.
 import fs from 'node:fs';
@@ -130,6 +131,50 @@ const exporters = Object.fromEntries(
 );
 const executablePath = await puppeteer.executablePath();
 
+// Whether a picture hides what lies beneath depends on its pixels at the spot,
+// not on its box: an icon or a rounded border drawn as a picture is mostly
+// transparent. One browser page samples them for the whole run.
+const sampler = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
+const samplerPage = await sampler.newPage();
+
+/** Alpha (0–1) of a picture at (u, v) of its box, drawn as PowerPoint stretches it into the box. */
+function pictureAlphaAt({ dataUrl, u, v, boxWidth, boxHeight, crop }) {
+  return samplerPage.evaluate(
+    async (source) => {
+      const image = new Image();
+      image.src = source.dataUrl;
+      await image.decode();
+      const scale = Math.min(1, 512 / Math.max(source.boxWidth, source.boxHeight));
+      const [width, height] = [source.boxWidth, source.boxHeight].map((size) => Math.max(1, Math.round(size * scale)));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      const [naturalWidth, naturalHeight] = [image.naturalWidth || width, image.naturalHeight || height];
+      const { l, t, r, b } = source.crop;
+      context.drawImage(
+        image,
+        l * naturalWidth,
+        t * naturalHeight,
+        (1 - l - r) * naturalWidth,
+        (1 - t - b) * naturalHeight,
+        0,
+        0,
+        width,
+        height
+      );
+      const x = Math.min(width - 1, Math.floor(source.u * width));
+      const y = Math.min(height - 1, Math.floor(source.v * height));
+      return context.getImageData(x, y, 1, 1).data[3] / 255;
+    },
+    { dataUrl, u, v, boxWidth, boxHeight, crop }
+  );
+}
+
+const MEDIA_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml' };
+const OPAQUE_ALPHA = 0.95;
+const EMU_PER_PX = 9525;
+
 const runs = fs
   .readdirSync(args.runs)
   .filter((run) => fs.existsSync(path.join(args.runs, run, 'presentation/deck.html')))
@@ -138,7 +183,7 @@ const runs = fs
 
 function xmlFacts(xml) {
   const shapes = Array.from(xml.matchAll(/<p:sp>([\s\S]*?)<\/p:sp>/g), ([, sp]) => {
-    const off = sp.match(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"/);
+    const off = sp.match(/<a:off x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<a:ext cx="(\d+)" cy="(\d+)"/);
     const inset = sp.match(/<a:bodyPr[^>]*?lIns="(\d+)"[^>]*?rIns="(\d+)"/);
     const text = Array.from(sp.matchAll(/<a:t>([^<]*)<\/a:t>/g), (run) => run[1]).join('');
     return { text: text.slice(0, 50), off: off?.slice(1).join(','), inset: inset?.slice(1).join(',') };
@@ -167,50 +212,119 @@ function xmlFacts(xml) {
 
 // Text frames that an opaque shape or picture painted after them covers at their
 // centre.
-function coveredTexts(xml) {
+async function coveredTexts(xml, zip, slideNumber) {
+  const rels = (await zip.file(`ppt/slides/_rels/slide${slideNumber}.xml.rels`)?.async('string')) || '';
+  const targets = new Map(
+    Array.from(rels.matchAll(/<Relationship\b([^>]*)\/>/g), ([, attributes]) => [
+      attributes.match(/\bId="([^"]+)"/)?.[1],
+      path.posix.normalize(path.posix.join('ppt/slides', attributes.match(/\bTarget="([^"]+)"/)?.[1] || '')),
+    ])
+  );
   const shapes = Array.from(xml.matchAll(/<p:(sp|pic)>([\s\S]*?)<\/p:\1>/g), ([, kind, body]) => {
-    const off = body.match(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"/);
+    const off = body.match(/<a:off x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<a:ext cx="(\d+)" cy="(\d+)"/);
     if (!off) return null;
     const [x, y, w, h] = off.slice(1).map(Number);
-    const fill = body
-      .match(/<p:spPr\b[\s\S]*?<\/p:spPr>/)?.[0]
-      .match(/<a:solidFill><a:srgbClr val="\w+"(?:\/>|>([\s\S]*?)<\/a:srgbClr>)/);
-    const alpha = Number(fill?.[1]?.match(/<a:alpha val="(\d+)"/)?.[1] ?? 100000);
     const text = Array.from(body.matchAll(/<a:t>([^<]*)<\/a:t>/g), (run) => run[1]).join('');
-    return { x, y, w, h, text: text.trim(), opaque: kind === 'pic' || (Boolean(fill) && alpha >= 95000) };
+    return { kind, body, x, y, w, h, text: text.trim() };
   }).filter(Boolean);
-  return shapes
-    .filter((shape, index) => {
-      if (!shape.text) return false;
-      const [cx, cy] = [shape.x + shape.w / 2, shape.y + shape.h / 2];
-      return shapes
-        .slice(index + 1)
-        .some((over) => over.opaque && cx >= over.x && cx <= over.x + over.w && cy >= over.y && cy <= over.y + over.h);
+
+  const alphaOf = (colors) =>
+    Array.from(colors.matchAll(/<a:srgbClr val="\w+"(?:\/>|>([\s\S]*?)<\/a:srgbClr>)/g), (color) =>
+      Number(color[1]?.match(/<a:alpha val="(\d+)"/)?.[1] ?? 100000)
+    );
+  async function covers(over, px, py) {
+    if (over.w <= 0 || over.h <= 0 || px < over.x || px > over.x + over.w || py < over.y || py > over.y + over.h) {
+      return false;
+    }
+    if (over.kind === 'sp') {
+      // The fill, not the outline: a solid colour or a gradient whose every stop is opaque.
+      const spPr = (over.body.match(/<p:spPr\b[\s\S]*?<\/p:spPr>/)?.[0] || '').replace(/<a:ln\b[\s\S]*?<\/a:ln>/g, '');
+      const fill = spPr.match(/<a:(solidFill|gradFill)\b[\s\S]*?<\/a:\1>/)?.[0];
+      const alphas = fill ? alphaOf(fill) : [];
+      return alphas.length > 0 && alphas.every((alpha) => alpha >= OPAQUE_ALPHA * 100000);
+    }
+    const embed =
+      over.body.match(/<asvg:svgBlip\b[^>]*r:embed="([^"]+)"/)?.[1] ||
+      over.body.match(/<a:blip\b[^>]*r:embed="([^"]+)"/)?.[1];
+    const media = embed && zip.file(targets.get(embed) || '');
+    // A picture whose data cannot be read counts as opaque, as a box would.
+    if (!media) return true;
+    const type = MEDIA_TYPES[path.extname(media.name).slice(1).toLowerCase()] || 'image/png';
+    const srcRect = over.body.match(/<a:srcRect\b([^>]*)\/>/)?.[1] || '';
+    const edge = (side) => Number(srcRect.match(new RegExp(`\\b${side}="(-?\\d+)"`))?.[1] || 0) / 100000;
+    const amount = Number(over.body.match(/<a:alphaModFix amt="(\d+)"/)?.[1] ?? 100000) / 100000;
+    const alpha = await pictureAlphaAt({
+      dataUrl: `data:${type};base64,${await media.async('base64')}`,
+      u: (px - over.x) / over.w,
+      v: (py - over.y) / over.h,
+      boxWidth: over.w / EMU_PER_PX,
+      boxHeight: over.h / EMU_PER_PX,
+      crop: { l: edge('l'), t: edge('t'), r: edge('r'), b: edge('b') },
+    });
+    return alpha * amount >= OPAQUE_ALPHA;
+  }
+
+  const covered = [];
+  for (const [index, shape] of shapes.entries()) {
+    if (!shape.text) continue;
+    const [cx, cy] = [shape.x + shape.w / 2, shape.y + shape.h / 2];
+    for (const over of shapes.slice(index + 1)) {
+      if (await covers(over, cx, cy)) {
+        covered.push(shape.text.slice(0, 50));
+        break;
+      }
+    }
+  }
+  return covered;
+}
+
+// Frames pair up by their text, and frames that share a text with the nearest
+// one, so a frame that only moves in the paint order keeps its partner.
+function pairFrames(before, after) {
+  const position = (frame) => (frame.off || '0,0').split(',').map(Number);
+  const candidates = [];
+  before.forEach((frame, i) =>
+    after.forEach((other, j) => {
+      if (frame.text !== other.text) return;
+      const [[x1, y1], [x2, y2]] = [position(frame), position(other)];
+      candidates.push({ i, j, distance: Math.hypot(x1 - x2, y1 - y2) });
     })
-    .map((shape) => shape.text.slice(0, 50));
+  );
+  const [pairedBefore, pairedAfter, pairs] = [new Set(), new Set(), []];
+  for (const { i, j } of candidates.sort((a, b) => a.distance - b.distance)) {
+    if (pairedBefore.has(i) || pairedAfter.has(j)) continue;
+    pairedBefore.add(i);
+    pairedAfter.add(j);
+    pairs.push([before[i], after[j]]);
+  }
+  return {
+    pairs,
+    removed: before.filter((_, i) => !pairedBefore.has(i)),
+    added: after.filter((_, j) => !pairedAfter.has(j)),
+  };
 }
 
 function xmlChanges(base, fix) {
   const changes = [];
-  if (base.shapes.length !== fix.shapes.length)
-    changes.push(`structure: ${base.shapes.length} -> ${fix.shapes.length} text frames`);
   if (base.cells.length !== fix.cells.length)
     changes.push(`structure: ${base.cells.length} -> ${fix.cells.length} table cells`);
-  const compare = (kind, before, after, keys) =>
-    before.forEach((item, index) => {
-      for (const key of keys) {
-        if (after[index] && item[key] !== after[index][key]) {
-          changes.push(`${kind}-${key}: "${item.text}" ${item[key]} -> ${after[index][key]}`);
-        }
-      }
-    });
-  // Frames pair up by their text, so one that only moves in the paint order
-  // does not shift every frame after it onto a stranger.
-  const byText = (shapes) => [...shapes].sort((a, b) => a.text.localeCompare(b.text));
-  compare('frame', byText(base.shapes), byText(fix.shapes), ['off', 'inset']);
+  const frames = pairFrames(base.shapes, fix.shapes);
+  for (const [before, after] of frames.pairs) {
+    for (const key of ['off', 'inset']) {
+      if (before[key] !== after[key]) changes.push(`frame-${key}: "${before.text}" ${before[key]} -> ${after[key]}`);
+    }
+  }
+  for (const frame of frames.removed) changes.push(`frame-removed: "${frame.text}"`);
+  for (const frame of frames.added) changes.push(`frame-added: "${frame.text}"`);
   if (base.shapes.map((shape) => shape.text).join('\n') !== fix.shapes.map((shape) => shape.text).join('\n'))
     changes.push('order: text frames painted in another order');
-  compare('cell', base.cells, fix.cells, ['fill', 'margin', 'rowHeight']);
+  base.cells.forEach((cell, index) => {
+    for (const key of ['fill', 'margin', 'rowHeight']) {
+      if (fix.cells[index] && cell[key] !== fix.cells[index][key]) {
+        changes.push(`cell-${key}: "${cell.text}" ${cell[key]} -> ${fix.cells[index][key]}`);
+      }
+    }
+  });
   return changes;
 }
 
@@ -280,8 +394,10 @@ async function compareRun(run) {
       xml: xmlFacts(xml[index]),
       findings: analyzePage(page, office[index] || [], xml[index], {}).map(({ kind, detail }) => `${kind}: ${detail}`),
       deviations: wordDeviations(page.words, office[index] || []),
-      covered: coveredTexts(xml[index]),
     }));
+    for (const [index, slideFacts] of variants[variant].entries()) {
+      slideFacts.covered = await coveredTexts(xml[index], zip, index + 1);
+    }
   }
 
   const slides = pages.map((page, index) => {
@@ -315,19 +431,19 @@ async function compareRun(run) {
       deviationPt: Object.fromEntries(
         LINE_KINDS.map((kind) => [kind, Object.fromEntries(VARIANTS.map((variant) => [variant, sum(variant, kind)]))])
       ),
+      covered: { base: base.covered, fix: fix.covered },
       textCovered: fix.covered.filter((text) => !base.covered.includes(text)),
       textUncovered: base.covered.filter((text) => !fix.covered.includes(text)),
-      // Every matched word, for the summary's mean offset per word.
+      // The words both builds place, for the summary's mean offset per word: a
+      // word only one build finds would skew one mean and not the other.
       offsets: Object.fromEntries(
-        LINE_KINDS.map((kind) => [
-          kind,
-          Object.fromEntries(
-            VARIANTS.map((variant) => [
-              variant,
-              words.filter((word) => word.kind === kind && word[variant]).map((word) => offset(word[variant])),
-            ])
-          ),
-        ])
+        LINE_KINDS.map((kind) => {
+          const shared = words.filter((word) => word.kind === kind && word.base && word.fix);
+          return [
+            kind,
+            Object.fromEntries(VARIANTS.map((variant) => [variant, shared.map((word) => offset(word[variant]))])),
+          ];
+        })
       ),
     };
   });
@@ -400,7 +516,7 @@ fs.writeFileSync(path.join(args.out, 'summary.json'), JSON.stringify(summary, nu
 console.log(`\n${summary.runs} runs, ${summary.slides} slides, ${changed.length} changed, ${failures.length} failed`);
 for (const kind of LINE_KINDS) {
   const { base, fix } = meanOffsetPt[kind];
-  console.log(`mean offset per word, ${kind}-line blocks: ${base} -> ${fix} pt`);
+  console.log(`mean offset per word placed by both builds, ${kind}-line blocks: ${base} -> ${fix} pt`);
 }
 const pair = ({ base, fix }) => `${base} -> ${fix}`;
 for (const slide of changed) {
@@ -410,3 +526,4 @@ for (const slide of changed) {
       `covered text -${slide.textUncovered.length}/+${slide.textCovered.length}, ${slide.xmlChanges.length} XML changes`
   );
 }
+await sampler.close();
