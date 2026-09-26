@@ -461,15 +461,20 @@ describe('list text insets', () => {
 });
 
 // A list item that paints -- a separator line, a dot drawn by its ::before --
-// has nowhere to go in one text box for the whole list. The list takes the
-// ordinary path then, which draws both; pseudo-elements are no DOM children,
-// so the out-of-flow check alone never saw the dot.
+// has nowhere to go in one text box for the whole list. Such a list takes the
+// ordinary path, which draws both; pseudo-elements are no DOM children, so the
+// out-of-flow check alone never saw the dot. Only the list path draws the
+// browser's own markers, though, so a natively marked list whose items paint a
+// plain fill or square borders stays there and gets that paint as shapes.
 describe('lists whose items paint', () => {
-  const exportList = async (itemCss, beforeCss) => {
+  const DOT =
+    'content: ""; position: absolute; left: 0; top: 18px; width: 7px; height: 7px; background: #F24726; border-radius: 50%;';
+  const SEPARATOR = 'border-bottom: 1px solid #E5E7EB;';
+  const exportList = async ({ listStyle = 'none', itemCss = '', beforeCss = '' }) => {
     const html = `<!doctype html><html><head><style>
         * { box-sizing: border-box; margin: 0; }
         .slide { position: relative; width: 1280px; height: 720px; background: white; }
-        ul { position: absolute; left: 100px; top: 100px; width: 360px; list-style: none; padding: 0; }
+        ul { position: absolute; left: 100px; top: 100px; width: 360px; list-style: ${listStyle}; padding: 0 0 0 24px; }
         li { font: 14pt/20pt Arial, sans-serif; color: #4B5563; ${itemCss} }
         li::before { ${beforeCss} }
       </style></head><body><section class="slide"><ul><li>Erster Punkt</li><li>Zweiter Punkt</li><li>Dritter Punkt</li></ul></section></body></html>`;
@@ -478,28 +483,56 @@ describe('lists whose items paint', () => {
       pptxOptions: { width: 13.333333, height: 7.5, autoEmbedFonts: false },
     });
     const xml = await (await JSZip.loadAsync(buffer)).file('ppt/slides/slide1.xml').async('string');
-    return Array.from(xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g), (match) => match[0]);
+    const shapes = Array.from(xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g), (match) => match[0]);
+    return {
+      textFrames: shapes.filter((shape) => shape.includes('Punkt</a:t>')),
+      bullets: (xml.match(/<a:buChar /g) || []).length,
+      dots: shapes.filter((shape) => shape.includes('prst="ellipse"') && shape.includes('val="F24726"')).length,
+      separators: shapes.filter((shape) => shape.includes('val="E5E7EB"') && !shape.includes('<a:t>')).length,
+      spacingBefore: Array.from(xml.matchAll(/<a:spcBef><a:spcPts val="(\d+)"/g), (match) => Number(match[1]) / 100),
+    };
   };
 
   it('keeps the dot markers and separator lines of painted items', async () => {
-    const shapes = await exportList(
-      'position: relative; padding: 10px 0 10px 20px; border-bottom: 1px solid #E5E7EB;',
-      'content: ""; position: absolute; left: 0; top: 18px; width: 7px; height: 7px; background: #F24726; border-radius: 50%;'
-    );
-    const withText = (text) => shapes.filter((shape) => shape.includes(`<a:t>${text}</a:t>`));
+    const list = await exportList({
+      itemCss: `position: relative; padding: 10px 0 10px 20px; ${SEPARATOR}`,
+      beforeCss: DOT,
+    });
 
-    for (const item of ['Erster Punkt', 'Zweiter Punkt', 'Dritter Punkt']) expect(withText(item)).toHaveLength(1);
-    expect(shapes.filter((shape) => shape.includes('prst="ellipse"') && shape.includes('val="F24726"'))).toHaveLength(
-      3
-    );
-    expect(shapes.filter((shape) => shape.includes('val="E5E7EB"') && !shape.includes('<a:t>'))).toHaveLength(3);
+    expect(list.textFrames).toHaveLength(3);
+    expect(list.dots).toBe(3);
+    expect(list.separators).toBe(3);
+  });
+
+  it('draws dot markers of items that paint nothing else', async () => {
+    const list = await exportList({ itemCss: 'position: relative; padding-left: 20px;', beforeCss: DOT });
+
+    expect(list.textFrames).toHaveLength(3);
+    expect(list.dots).toBe(3);
+  });
+
+  it('draws the separator lines of items without markers', async () => {
+    const list = await exportList({ itemCss: `padding: 6px 0; ${SEPARATOR}` });
+
+    expect(list.textFrames).toHaveLength(3);
+    expect(list.separators).toBe(3);
+  });
+
+  it('keeps the native markers of a list whose items draw separator lines', async () => {
+    const list = await exportList({ listStyle: 'disc', itemCss: `padding: 6px 0; ${SEPARATOR}` });
+
+    expect(list.textFrames).toHaveLength(1);
+    expect(list.bullets).toBe(3);
+    expect(list.separators).toBe(3);
+    // The items' padding (6 px) and separator (1 px) keep their lines apart:
+    // 6 px before the first, 6 + 1 + 6 px between the others, in points.
+    expect(list.spacingBefore).toEqual([4.5, 9.75, 9.75]);
   });
 
   it('keeps a list whose markers are inline text in one text box', async () => {
-    const shapes = await exportList('', 'content: "– ";');
-    const listShapes = shapes.filter((shape) => shape.includes('Punkt</a:t>'));
+    const list = await exportList({ beforeCss: 'content: "– ";' });
 
-    expect(listShapes).toHaveLength(1);
-    expect(listShapes[0]).toContain('<a:t>Dritter Punkt</a:t>');
+    expect(list.textFrames).toHaveLength(1);
+    expect(list.textFrames[0]).toContain('<a:t>Dritter Punkt</a:t>');
   });
 });

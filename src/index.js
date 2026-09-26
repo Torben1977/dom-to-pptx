@@ -2721,11 +2721,27 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           // margin that collapsed out of the list sits outside the list's box:
           // adding it back as paragraph spacing moves the text down twice and
           // pushes the last item past the bottom edge.
+          // Measured between the items' content boxes, where their lines are:
+          // an item's own padding and border keep its lines from the next
+          // item's as much as a margin does, and a separator line drawn at the
+          // item's border otherwise cut through the text.
           const contentTop = parentRect.top + (parseFloat(style.borderTopWidth) || 0) + ulPaddingTop;
           const contentBottom = parentRect.bottom - (parseFloat(style.borderBottomWidth) || 0) - ulPaddingBottom;
-          const previousBottom = index > 0 ? liChildren[index - 1].getBoundingClientRect().bottom : contentTop;
-          const spaceBefore = liRect.top - previousBottom;
-          const spaceAfter = index === liChildren.length - 1 ? contentBottom - liRect.bottom : 0;
+          const itemContent = (li) => {
+            const rect = li.getBoundingClientRect();
+            const itemStyle = window.getComputedStyle(li);
+            return {
+              top: rect.top + (parseFloat(itemStyle.borderTopWidth) || 0) + (parseFloat(itemStyle.paddingTop) || 0),
+              bottom:
+                rect.bottom -
+                (parseFloat(itemStyle.borderBottomWidth) || 0) -
+                (parseFloat(itemStyle.paddingBottom) || 0),
+            };
+          };
+          const ownContent = itemContent(child);
+          const previousBottom = index > 0 ? itemContent(liChildren[index - 1]).bottom : contentTop;
+          const spaceBefore = ownContent.top - previousBottom;
+          const spaceAfter = index === liChildren.length - 1 ? contentBottom - ownContent.bottom : 0;
           if (spaceBefore > 0) ptBefore = spaceBefore * 0.75 * config.scale;
           if (spaceAfter > 0) ptAfter = spaceAfter * 0.75 * config.scale;
         }
@@ -2797,6 +2813,47 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           shapeType: listShapeType,
           options: listShapeOpts,
         });
+      }
+
+      // The items' own fills and borders -- a separator line under each item,
+      // say. isComplexHierarchy keeps only lists here whose items paint a plain
+      // fill or square borders, so these two are all there is to draw.
+      for (const li of liChildren) {
+        const liPaint = describeBoxPaint(window.getComputedStyle(li), config.scale);
+        if (!liPaint.hasFill && !liPaint.hasBorder) continue;
+        const liRect = li.getBoundingClientRect();
+        const liBox = {
+          x: config.offX + (liRect.left - config.rootX) * PX_TO_INCH * config.scale,
+          y: config.offY + (liRect.top - config.rootY) * PX_TO_INCH * config.scale,
+          w: liRect.width * PX_TO_INCH * config.scale,
+          h: liRect.height * PX_TO_INCH * config.scale,
+        };
+        if (liPaint.hasFill) {
+          items.push({
+            type: 'shape',
+            zIndex: parentSortKey.concat([-Infinity]),
+            domOrder,
+            shapeType: pptx.ShapeType.rect,
+            options: {
+              ...liBox,
+              fill: { color: liPaint.fill.hex, transparency: (1 - liPaint.fill.opacity) * 100 },
+            },
+          });
+        }
+        if (liPaint.hasBorder) {
+          items.push(
+            ...createCompositeBorderItems(
+              liPaint.borderInfo.sides,
+              liBox.x,
+              liBox.y,
+              liBox.w,
+              liBox.h,
+              config.scale,
+              parentSortKey.concat([0, 0]),
+              domOrder
+            )
+          );
+        }
       }
 
       const textFit = getPowerPointTextFit(node, style);
@@ -3694,7 +3751,36 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
   return { items, job: combinedJob, stopRecursion: !!textPayload || !!shadowSvg };
 }
 
+/** What an element's own box paints: fill, borders, shadow, background image, rounded corners. */
+function describeBoxPaint(style, scale = 1) {
+  const fill = parseColor(style.backgroundColor);
+  const hasFill = Boolean(fill.hex) && fill.opacity > 0;
+  const borderInfo = getBorderInfo(style, scale);
+  const hasBorder =
+    borderInfo.type !== 'none' && Object.values(borderInfo.sides).some((side) => side.width > 0 && side.opacity > 0);
+  const hasShadow = Boolean(style.boxShadow) && style.boxShadow !== 'none';
+  const hasBackgroundImage = Boolean(style.backgroundImage) && style.backgroundImage !== 'none';
+  const hasRadius = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'].some(
+    (corner) => (parseFloat(style[`border${corner}Radius`]) || 0) > 0
+  );
+  return {
+    fill,
+    hasFill,
+    borderInfo,
+    hasBorder,
+    hasShadow,
+    hasBackgroundImage,
+    hasRadius,
+    paints: hasFill || hasBorder || hasShadow || hasBackgroundImage,
+  };
+}
+
 function isComplexHierarchy(root, pseudoContentByNode = null) {
+  const hasNativeMarkers = Array.from(root.children).some((child) => {
+    if ((child?.tagName || '').toLowerCase() !== 'li') return false;
+    const childStyle = window.getComputedStyle(child);
+    return childStyle.display === 'list-item' && childStyle.listStyleType !== 'none';
+  });
   // Use a simple tree traversal to find forbidden elements in the list structure
   const stack = [root];
   while (stack.length > 0) {
@@ -3710,19 +3796,13 @@ function isComplexHierarchy(root, pseudoContentByNode = null) {
       // 1b. An item that paints -- a separator line, a fill, a shadow -- or
       // whose ::before/::after paints as an object of its own, such as a dot
       // marker. One text box for the whole list has room for neither, so both
-      // were dropped; pseudo-elements are no DOM children and step 2b misses them.
-      const background = parseColor(s.backgroundColor);
-      const paintsBorder = ['Top', 'Right', 'Bottom', 'Left'].some(
-        (side) => (parseFloat(s[`border${side}Width`]) || 0) > 0 && parseColor(s[`border${side}Color`]).opacity > 0
-      );
-      if (
-        (background.hex && background.opacity > 0) ||
-        (s.backgroundImage && s.backgroundImage !== 'none') ||
-        (s.boxShadow && s.boxShadow !== 'none') ||
-        paintsBorder
-      ) {
-        return true;
-      }
+      // were dropped; pseudo-elements are no DOM children and step 2b misses
+      // them. Only this path draws the browser's own markers, though: a list
+      // that has them stays here when its items' paint is a plain fill or
+      // square borders, which the list path draws itself.
+      const paint = describeBoxPaint(s);
+      const listPathDrawsPaint = hasNativeMarkers && !paint.hasShadow && !paint.hasBackgroundImage && !paint.hasRadius;
+      if (paint.paints && !listPathDrawsPaint) return true;
       if (
         ['::before', '::after'].some(
           (pseudoType) => describePseudoElementPaint(el, pseudoType, pseudoContentByNode).ownsObject

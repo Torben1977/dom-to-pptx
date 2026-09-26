@@ -555,6 +555,7 @@ export function getBorderInfo(style, scale) {
   if (isUniform) {
     return {
       type: 'uniform',
+      sides: { top, right, bottom, left },
       options: {
         width: top.width * 0.75 * scale,
         color: top.color,
