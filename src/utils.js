@@ -351,8 +351,11 @@ function isInTextFlowOf(element, root) {
  * viewport top: the bottom of a zero-size inline-block the browser seats on it,
  * put right after the first in-flow text for the measurement and taken out
  * again. At the end of `node` it would open a line of its own after a block
- * child. Null without text or layout (jsdom), and where that text sits in a flex
- * or grid container, whose children are laid out as items rather than on a line.
+ * child. A line may also break after an inline-block, and does where the text is
+ * wider than its box, so its parent does not wrap while the marker is in.
+ * Null without text or layout (jsdom), where that text sits in a flex or grid
+ * container, whose children are laid out as items rather than on a line, and
+ * where the measurement moved the text or its baseline misses the text's glyphs.
  */
 export function measureTextBaselinePx(node) {
   if (typeof document.createRange().getClientRects !== 'function') return null;
@@ -364,15 +367,27 @@ export function measureTextBaselinePx(node) {
     text = walker.nextNode();
   }
   if (!text) return null;
-  const display = window.getComputedStyle(text.parentElement).display || '';
+  const parent = text.parentElement;
+  const display = window.getComputedStyle(parent).display || '';
   if (display.includes('flex') || display.includes('grid')) return null;
+  const glyphs = document.createRange();
+  glyphs.selectNodeContents(text);
+  const lineTop = glyphs.getClientRects()[0]?.top;
+  if (lineTop === undefined) return null;
+  const inlineStyle = parent.getAttribute('style');
+  parent.style.setProperty('text-wrap-mode', 'nowrap', 'important');
   const marker = document.createElement('span');
   marker.style.cssText = 'display:inline-block;width:0;height:0;margin:0;padding:0;border:0;vertical-align:baseline';
-  text.parentNode.insertBefore(marker, text.nextSibling);
+  parent.insertBefore(marker, text.nextSibling);
   try {
-    return marker.getBoundingClientRect().bottom;
+    const baseline = marker.getBoundingClientRect().bottom;
+    const line = glyphs.getClientRects()[0];
+    const unmoved = line && Math.abs(line.top - lineTop) < 0.5;
+    return unmoved && baseline > line.top && baseline < line.bottom ? baseline : null;
   } finally {
     marker.remove();
+    if (inlineStyle === null) parent.removeAttribute('style');
+    else parent.setAttribute('style', inlineStyle);
   }
 }
 

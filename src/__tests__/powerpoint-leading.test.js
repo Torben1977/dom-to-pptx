@@ -45,11 +45,16 @@ async function browserBaselines(html) {
     return await page.evaluate(() =>
       Object.fromEntries(
         Array.from(document.querySelectorAll('.text'), (element) => {
+          // Without a wrap opportunity the marker stays on the line even where
+          // the text is wider than its box.
+          const whiteSpace = element.style.whiteSpace;
+          element.style.whiteSpace = 'nowrap';
           const marker = document.createElement('span');
           marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
           element.appendChild(marker);
           const baseline = marker.getBoundingClientRect().bottom;
           marker.remove();
+          element.style.whiteSpace = whiteSpace;
           return [element.textContent.trim(), { baseline, fontPx: parseFloat(getComputedStyle(element).fontSize) }];
         })
       )
@@ -85,6 +90,16 @@ describe("PowerPoint's leading", () => {
       expect(shape, text).toContain('<a:spcPct val="100000"/>');
       expect(shape, text).not.toContain('<a:spcPts');
     }
+  });
+
+  it('seats the baseline of a word wider than its box', async () => {
+    const html = slide(
+      '<p class="text" style="top: 100px; width: 60px; white-space: normal; font-size: 42pt; line-height: 48pt">01</p>'
+    );
+    const [xml, lines] = await Promise.all([exportXml(html), browserBaselines(html)]);
+    const { baseline, fontPx } = lines['01'];
+
+    expect(topPx(shapeFor(xml, '01'))).toBeCloseTo(baseline - BASELINE_EM * fontPx, 0);
   });
 
   it("keeps a painted single-line frame in place and seats its baseline on the browser's through the inset", async () => {
