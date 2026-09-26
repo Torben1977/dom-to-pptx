@@ -14,12 +14,18 @@
 // opens one deck at a time in PowerPoint, exports it as PDF and closes it
 // unsaved; open presentations are left alone.
 //
-// Per slide it reports three things:
+// Per slide it reports four things:
 //   - XML changes between the builds: text frame geometry and insets, table cell
 //     fills and margins, row heights;
 //   - the fidelity findings of both builds (the defect kinds of the Treue-Test);
-//   - per word, how far Office puts it from the browser, relative to the slide's
-//     median offset, summed over the words whose position changed.
+//   - per word, how far Office puts it from the browser, summed over the words
+//     whose position changed, apart for blocks of one line and of several: the
+//     converter places them by different rules, and a fix to one can hide in the
+//     sum of both;
+//   - text frames an opaque shape or picture painted after them covers. pdftotext
+//     finds covered text all the same, so no word measurement notices it.
+//
+// The summary adds, over all slides, each build's mean offset per word.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +37,7 @@ import {
   analyzePage,
   assignWords,
   convertToPdf,
+  groupLines,
   measureBrowserPages,
   parseOfficeWords,
 } from '../src/__tests__/helpers/office-fidelity.js';
@@ -158,6 +165,31 @@ function xmlFacts(xml) {
   return { shapes, cells };
 }
 
+// Text frames that an opaque shape or picture painted after them covers at their
+// centre.
+function coveredTexts(xml) {
+  const shapes = Array.from(xml.matchAll(/<p:(sp|pic)>([\s\S]*?)<\/p:\1>/g), ([, kind, body]) => {
+    const off = body.match(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"/);
+    if (!off) return null;
+    const [x, y, w, h] = off.slice(1).map(Number);
+    const fill = body
+      .match(/<p:spPr\b[\s\S]*?<\/p:spPr>/)?.[0]
+      .match(/<a:solidFill><a:srgbClr val="\w+"(?:\/>|>([\s\S]*?)<\/a:srgbClr>)/);
+    const alpha = Number(fill?.[1]?.match(/<a:alpha val="(\d+)"/)?.[1] ?? 100000);
+    const text = Array.from(body.matchAll(/<a:t>([^<]*)<\/a:t>/g), (run) => run[1]).join('');
+    return { x, y, w, h, text: text.trim(), opaque: kind === 'pic' || (Boolean(fill) && alpha >= 95000) };
+  }).filter(Boolean);
+  return shapes
+    .filter((shape, index) => {
+      if (!shape.text) return false;
+      const [cx, cy] = [shape.x + shape.w / 2, shape.y + shape.h / 2];
+      return shapes
+        .slice(index + 1)
+        .some((over) => over.opaque && cx >= over.x && cx <= over.x + over.w && cy >= over.y && cy <= over.y + over.h);
+    })
+    .map((shape) => shape.text.slice(0, 50));
+}
+
 function xmlChanges(base, fix) {
   const changes = [];
   if (base.shapes.length !== fix.shapes.length)
@@ -172,7 +204,12 @@ function xmlChanges(base, fix) {
         }
       }
     });
-  compare('frame', base.shapes, fix.shapes, ['off', 'inset']);
+  // Frames pair up by their text, so one that only moves in the paint order
+  // does not shift every frame after it onto a stranger.
+  const byText = (shapes) => [...shapes].sort((a, b) => a.text.localeCompare(b.text));
+  compare('frame', byText(base.shapes), byText(fix.shapes), ['off', 'inset']);
+  if (base.shapes.map((shape) => shape.text).join('\n') !== fix.shapes.map((shape) => shape.text).join('\n'))
+    changes.push('order: text frames painted in another order');
   compare('cell', base.cells, fix.cells, ['fill', 'margin', 'rowHeight']);
   return changes;
 }
@@ -181,24 +218,32 @@ function xmlChanges(base, fix) {
 // same finding; how far things moved is what the word deviations measure.
 const findingKey = (finding) => finding.replace(/-?\d+(\.\d+)?/g, '#');
 
-// Per word, Office position minus browser position, less the slide's median.
+// Per word, Office position minus browser position; null where Office has no
+// such word. Taken as it is: a deviation relative to the slide's median misled
+// wherever a fix moved only part of a slide's frames, because the median moved
+// with them (a clear improvement read as 240 slides worse).
 function wordDeviations(browserWords, officeWords) {
   const pairs = assignWords(browserWords, officeWords);
-  const raw = browserWords.map((word, index) =>
+  return browserWords.map((word, index) =>
     pairs.has(index)
       ? { dy: officeWords[pairs.get(index)].top - word.top, dx: officeWords[pairs.get(index)].x - word.x }
       : null
   );
-  const median = (key) => {
-    const values = raw
-      .filter(Boolean)
-      .map((deviation) => deviation[key])
-      .sort((a, b) => a - b);
-    return values.length ? values[Math.floor(values.length / 2)] : 0;
-  };
-  const [my, mx] = [median('dy'), median('dx')];
-  return raw.map((deviation) => deviation && { dy: deviation.dy - my, dx: deviation.dx - mx });
 }
+
+const LINE_KINDS = ['single', 'multi'];
+
+// Per word, whether its block holds one line or several in the browser.
+function lineKinds(words) {
+  const blocks = new Map();
+  for (const word of words) blocks.set(word.block, [...(blocks.get(word.block) || []), word]);
+  const kinds = new Map(
+    [...blocks].map(([block, blockWords]) => [block, groupLines(blockWords).length > 1 ? 'multi' : 'single'])
+  );
+  return words.map((word) => kinds.get(word.block));
+}
+
+const offset = (deviation) => Math.abs(deviation.dy) + Math.abs(deviation.dx);
 
 async function compareRun(run) {
   const outDir = path.join(args.out, run);
@@ -235,21 +280,30 @@ async function compareRun(run) {
       xml: xmlFacts(xml[index]),
       findings: analyzePage(page, office[index] || [], xml[index], {}).map(({ kind, detail }) => `${kind}: ${detail}`),
       deviations: wordDeviations(page.words, office[index] || []),
+      covered: coveredTexts(xml[index]),
     }));
   }
 
   const slides = pages.map((page, index) => {
     const [base, fix] = VARIANTS.map((variant) => variants[variant][index]);
-    const moved = page.words
-      .map((word, wordIndex) => ({ word: word.text, base: base.deviations[wordIndex], fix: fix.deviations[wordIndex] }))
-      .filter(({ base: before, fix: after }) =>
-        before && after
-          ? Math.abs(before.dy - after.dy) > 0.3 || Math.abs(before.dx - after.dx) > 0.3
-          : before !== after
-      );
+    const kinds = lineKinds(page.words);
+    const words = page.words.map((word, wordIndex) => ({
+      word: word.text,
+      kind: kinds[wordIndex],
+      base: base.deviations[wordIndex],
+      fix: fix.deviations[wordIndex],
+    }));
+    const moved = words.filter(({ base: before, fix: after }) =>
+      before && after ? Math.abs(before.dy - after.dy) > 0.3 || Math.abs(before.dx - after.dx) > 0.3 : before !== after
+    );
     const [baseKeys, fixKeys] = [base, fix].map((variant) => new Set(variant.findings.map(findingKey)));
-    const sum = (key) =>
-      moved.reduce((total, word) => total + (word[key] ? Math.abs(word[key].dy) + Math.abs(word[key].dx) : 0), 0);
+    const sum = (variant, kind) =>
+      Number(
+        moved
+          .filter((word) => word.kind === kind && word[variant])
+          .reduce((total, word) => total + offset(word[variant]), 0)
+          .toFixed(1)
+      );
     return {
       slide: index + 1,
       xmlChanges: xmlChanges(base.xml, fix.xml),
@@ -258,7 +312,23 @@ async function compareRun(run) {
       movedWords: moved.length,
       wordsLost: moved.filter((word) => word.base && !word.fix).map((word) => word.word),
       wordsFound: moved.filter((word) => !word.base && word.fix).map((word) => word.word),
-      deviationPt: { base: Number(sum('base').toFixed(1)), fix: Number(sum('fix').toFixed(1)) },
+      deviationPt: Object.fromEntries(
+        LINE_KINDS.map((kind) => [kind, Object.fromEntries(VARIANTS.map((variant) => [variant, sum(variant, kind)]))])
+      ),
+      textCovered: fix.covered.filter((text) => !base.covered.includes(text)),
+      textUncovered: base.covered.filter((text) => !fix.covered.includes(text)),
+      // Every matched word, for the summary's mean offset per word.
+      offsets: Object.fromEntries(
+        LINE_KINDS.map((kind) => [
+          kind,
+          Object.fromEntries(
+            VARIANTS.map((variant) => [
+              variant,
+              words.filter((word) => word.kind === kind && word[variant]).map((word) => offset(word[variant])),
+            ])
+          ),
+        ])
+      ),
     };
   });
   const result = { run, slides };
@@ -267,14 +337,17 @@ async function compareRun(run) {
 }
 
 function verdict(slide) {
+  const deviations = LINE_KINDS.map((kind) => slide.deviationPt[kind]);
   const worse =
     slide.findingsAdded.length > 0 ||
     slide.wordsLost.length > 0 ||
-    slide.deviationPt.fix > slide.deviationPt.base + 0.5;
+    slide.textCovered.length > 0 ||
+    deviations.some(({ base, fix }) => fix > base + 0.5);
   const better =
     slide.findingsGone.length > 0 ||
     slide.wordsFound.length > 0 ||
-    slide.deviationPt.fix < slide.deviationPt.base - 0.5;
+    slide.textUncovered.length > 0 ||
+    deviations.some(({ base, fix }) => fix < base - 0.5);
   return worse && better ? 'mixed' : worse ? 'worse' : better ? 'better' : 'same';
 }
 
@@ -298,21 +371,42 @@ await Promise.all(
   })
 );
 
-const changed = results
-  .flatMap((result) => result.slides.map((slide) => ({ run: result.run, ...slide, verdict: verdict(slide) })))
-  .filter((slide) => slide.verdict !== 'same' || slide.xmlChanges.length);
+const allSlides = results.flatMap((result) =>
+  result.slides.map((slide) => ({ run: result.run, ...slide, verdict: verdict(slide) }))
+);
+// The word offsets feed the mean below; the list of changed slides leaves them out.
+const changed = allSlides
+  .filter((slide) => slide.verdict !== 'same' || slide.xmlChanges.length)
+  .map(({ offsets, ...slide }) => slide);
+const mean = (values) =>
+  values.length ? Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2)) : null;
+const meanOffsetPt = Object.fromEntries(
+  LINE_KINDS.map((kind) => [
+    kind,
+    Object.fromEntries(
+      VARIANTS.map((variant) => [variant, mean(allSlides.flatMap((slide) => slide.offsets[kind][variant]))])
+    ),
+  ])
+);
 const summary = {
   runs: results.length,
-  slides: results.reduce((total, result) => total + result.slides.length, 0),
+  slides: allSlides.length,
   failures,
+  meanOffsetPt,
   verdicts: changed.reduce((counts, slide) => ({ ...counts, [slide.verdict]: (counts[slide.verdict] || 0) + 1 }), {}),
   changed,
 };
 fs.writeFileSync(path.join(args.out, 'summary.json'), JSON.stringify(summary, null, 2));
 console.log(`\n${summary.runs} runs, ${summary.slides} slides, ${changed.length} changed, ${failures.length} failed`);
+for (const kind of LINE_KINDS) {
+  const { base, fix } = meanOffsetPt[kind];
+  console.log(`mean offset per word, ${kind}-line blocks: ${base} -> ${fix} pt`);
+}
+const pair = ({ base, fix }) => `${base} -> ${fix}`;
 for (const slide of changed) {
   console.log(
-    `${slide.verdict.padEnd(6)} ${slide.run} s${slide.slide}: deviation ${slide.deviationPt.base} -> ${slide.deviationPt.fix} pt, ` +
-      `findings -${slide.findingsGone.length}/+${slide.findingsAdded.length}, ${slide.xmlChanges.length} XML changes`
+    `${slide.verdict.padEnd(6)} ${slide.run} s${slide.slide}: deviation single ${pair(slide.deviationPt.single)} pt, ` +
+      `multi ${pair(slide.deviationPt.multi)} pt, findings -${slide.findingsGone.length}/+${slide.findingsAdded.length}, ` +
+      `covered text -${slide.textUncovered.length}/+${slide.textCovered.length}, ${slide.xmlChanges.length} XML changes`
   );
 }
