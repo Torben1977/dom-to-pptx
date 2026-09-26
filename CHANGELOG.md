@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2-orglith.21] - 2026-09-27
+
+### Fixed
+
+- Shapes paint in the layers CSS paints a stacking context in (CSS 2.1 Appendix E). Positioned elements and stacking contexts with z-index auto or 0 paint above the in-flow content of their context, wherever they stand in the tree; in-flow content inside a positioned element paints with it; a positioned `::before` or `::after` paints in that layer as the first or last child of its element. Before, everything at z-index 0 painted in tree order, so loose text lay above a positioned box before it and a positioned `::after` beneath its element's loose text. On OrgLith's 57 benchmark decks one slide changes visibly: a gradient line drawn by `::before` lies over its element's border again, as in the browser.
+
+### Changed
+
+- `scripts/compare-benchmark-decks.mjs` takes each word's offset as it is instead of against the slide's median, apart for blocks of one line and of several. It counts the text frames that an opaque shape or picture painted after them covers, because pdftotext finds covered text all the same: a picture by its own pixels at the spot, sampled in a browser, a gradient when every stop is opaque. Frames pair up by their text and, among equal texts, by proximity, and the summary's mean offset takes only the words both builds place.
+- Tests: the baseline reference in `powerpoint-leading.test.js` is measured on a copy as wide as its text, independent of the wrap suppression the converter uses; `composite-border-z-order.test.js` looks for the gradient fill instead of the first picture.
+
 ## [2.1.2-orglith.20] - 2026-09-26
 
 Found on OrgLith's benchmark decks and measured on them: up to 54 decks, rendered in LibreOffice and, where the two renderers disagree, in PowerPoint.
