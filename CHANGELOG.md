@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2-orglith.20] - 2026-09-26
+
+Found on OrgLith's benchmark decks and measured on them: up to 54 decks, rendered in LibreOffice and, where the two renderers disagree, in PowerPoint.
+
+### Added
+
+- `scripts/compare-benchmark-decks.mjs` runs two built checkouts over a folder of benchmark decks (the adapter's `deck.html`) and reports per slide the XML changes, the fidelity findings of both and how far Office puts each word from the browser. `--renderer powerpoint` renders with Microsoft PowerPoint on macOS; a PowerPoint that stops answering ends the run instead of queueing every further deck behind it.
+
+### Fixed
+
+- A table cell without a background of its own shows what the browser paints beneath it: row, row group, column and column group (CSS 2.1 §17.5.1). The recommended row of a table was green in the browser and white in Office.
+- A table cell takes the wrap reserve from its inset on the side its text grows towards. In a column the browser shrank to its longest word, Office broke that word ("Ausführungskomplexitä|t").
+- A text frame with an accent line, a border on some sides drawn as a shape of its own, gets the wrap reserve too. Only the text frame grows; fill and border keep the browser's geometry.
+- Single-line text stays where the browser set it. It was clamped into its parent's content box and landed on its neighbours wherever the browser let it overflow a box of fixed height. An inline element's line now comes from its font box and half the leading on each side, because its client rect is the font box, not the line.
+- A list whose items paint (a fill, a border, or a `::before` drawn as an object of its own) keeps its markers, separators and spacing. A list with browser markers stays on the list path, which now draws the items' fills and borders and measures the spacing between their content boxes.
+- Rasterized text keeps the browser's position and font. The icon fix-ups in `elementToCanvasImage` (inline-flex, centred, FontAwesome) apply only to icon captures now. html2canvas still does not draw `text-overflow: ellipsis`.
+- A single-line text frame sits on the browser's baseline: single line spacing, frame top 0.966 em above the measured baseline. At single spacing PowerPoint puts the baseline 0.94 em and LibreOffice 0.99 em below the frame top, whatever the font, while a fixed line spacing makes them place the leading differently: CSS splits it, PowerPoint puts about three quarters above the text, LibreOffice all of it. On 75 probes the RMS offset fell from 1.90 to 0.58 pt in PowerPoint and from 5.10 to 0.70 pt in LibreOffice. The baseline is measured while the text's parent does not wrap, so a word wider than its box keeps its line.
+- A paragraph of several lines looser than 1.46 times the font size is lifted by what PowerPoint adds above its first line, 0.234 × (line height − 1.46 × font size): a frame without paint as a whole, a painted frame or a table cell through its top inset.
+- Loose text, a text node beside a block child, paints above its parent's background. It sorted beneath every element of its stacking context, so a painted box covered its own text.
+
+### Changed
+
+- The Office roundtrip test of the key figure checks the order of number and unit and allows their font boxes to overlap by 1.5 pt. The browser itself overlaps them by 1 px at these tight lines.
+
 ## [2.1.2-orglith.19] - 2026-09-25
 
 The fidelity matrix measured less than it claimed. Headless LibreOffice on macOS saw only its bundled fonts, the paint comparison diluted small shapes in their probe box, and nothing checked where Office breaks lines. Measured honestly, three converter defects showed; all three are fixed.
