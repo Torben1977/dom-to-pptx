@@ -433,6 +433,30 @@ export function measureWrapReservePx(node, style) {
   return reserve;
 }
 
+// PowerPoint sets the extra leading of a line mostly above its text, where CSS
+// splits it evenly above and below. Measured over IBM Plex Sans and Arial at
+// 8–36 pt and line heights of 1.0–2.0 times the font size (PowerPoint 16.113,
+// 2026-09-26), the first line lands 0.234 × (line height − 1.46 × font size)
+// below the browser's. LibreOffice puts all of it above, about twice as far.
+const POWERPOINT_LEADING_SHARE = 0.234;
+const POWERPOINT_NEUTRAL_LINE_HEIGHT = 1.46;
+
+/**
+ * How far to lift the first line of these runs, in points. Only lines looser
+ * than 1.46 times the font size are lifted: there both renderers set the text
+ * too low, PowerPoint by the model above and LibreOffice by more. On tighter
+ * lines they part -- PowerPoint a little high, LibreOffice low -- and moving
+ * the text down for PowerPoint made 270 of 397 benchmark slides worse in
+ * LibreOffice, which renders the review images.
+ */
+export function powerPointLeadingCorrectionPt(textParts) {
+  const runs = Array.isArray(textParts) ? textParts : [];
+  const first = runs.find((run) => run?.options?.fontSize && run.options.lineSpacing);
+  if (!first) return 0;
+  const { fontSize, lineSpacing } = first.options;
+  return Math.max(0, POWERPOINT_LEADING_SHARE * (lineSpacing - POWERPOINT_NEUTRAL_LINE_HEIGHT * fontSize));
+}
+
 // Checks if any parent element has overflow: hidden which would clip this element
 export function isClippedByParent(node) {
   let parent = node.parentElement;

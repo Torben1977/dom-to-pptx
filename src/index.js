@@ -15,6 +15,7 @@ import {
   isOutOfTextFlow,
   isVisuallySuppressed,
   measureWrapReservePx,
+  powerPointLeadingCorrectionPt,
   isTextContainer,
   isTextContainerCached,
   createShapeMargin,
@@ -506,6 +507,33 @@ function isSimpleEditableMultiColumnContainer(node, style = window.getComputedSt
   });
 }
 
+/**
+ * Lifts a text frame's text by PowerPoint's leading correction. A frame that
+ * paints nothing moves as a whole; a painted one keeps its box, and its text
+ * moves within the top inset, as far as that reaches.
+ */
+function compensatePowerPointLeading(options, liftPt) {
+  if (!liftPt || options.rotate || options.vert || options.textDirection) return;
+  if (!options.fill && !options.line) {
+    options.y -= liftPt / 72;
+    return;
+  }
+  if (!Array.isArray(options.margin)) return;
+  // createShapeMargin order: [left, right, bottom, top], in points.
+  const margin = [...options.margin];
+  margin[3] = Math.max(0, margin[3] - liftPt);
+  options.margin = margin;
+}
+
+/** The same for a table cell, through its top margin ([top, right, bottom, left] in inches). */
+function compensateCellLeading(cell) {
+  const margin = cell?.options?.margin;
+  if (!Array.isArray(margin) || margin[0] >= 1 || cell.options.textDirection) return;
+  const liftPt = powerPointLeadingCorrectionPt(Array.isArray(cell.text) ? cell.text : []);
+  if (!liftPt) return;
+  cell.options.margin = [Math.max(0, margin[0] - liftPt / 72), ...margin.slice(1)];
+}
+
 async function processSlide(root, slide, pptx, globalOptions = {}) {
   const rootRect = root.getBoundingClientRect();
   const PPTX_WIDTH_IN = globalOptions._slideWidth || 10;
@@ -656,8 +684,12 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
 
     if (item.type === 'shape') slide.addShape(item.shapeType, item.options);
     if (item.type === 'image') slide.addImage(item.options);
-    if (item.type === 'text') slide.addText(item.textParts, item.options);
+    if (item.type === 'text') {
+      compensatePowerPointLeading(item.options, powerPointLeadingCorrectionPt(item.textParts));
+      slide.addText(item.textParts, item.options);
+    }
     if (item.type === 'table') {
+      item.tableData.rows.forEach((row) => row.forEach(compensateCellLeading));
       slide.addTable(item.tableData.rows, {
         x: item.options.x,
         y: item.options.y,

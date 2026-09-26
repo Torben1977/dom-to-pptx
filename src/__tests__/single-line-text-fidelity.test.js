@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { exportHtmlToPptx } from '../node-exporter.js';
+import { powerPointLeadingCorrectionPt } from '../utils.js';
+
+// Text frames carry PowerPoint's leading correction (see powerpoint-leading.test.js):
+// a line of this size and height moves up by this much, in CSS px.
+const leadingShiftPx = (sizePt, linePt) =>
+  powerPointLeadingCorrectionPt([{ options: { fontSize: sizePt, lineSpacing: linePt } }]) / 0.75;
 
 function shapeFor(xml, text) {
   const textIndex = xml.indexOf(`<a:t>${text}</a:t>`);
@@ -407,9 +413,9 @@ describe('browser single-line fidelity', () => {
 
     // The line heights fix the layout: 18.67 + 6 + 29.33 + 6 + 42.67 px in a 64 px
     // content box from 80 px, centred, so the paragraphs start 19.33 px above it.
-    expect(topPx('LABEL')).toBeCloseTo(60.67, 0);
-    expect(topPx('Heading line')).toBeCloseTo(85.33, 0);
-    expect(topPx('-18 %')).toBeCloseTo(120.67, 0);
+    expect(topPx('LABEL')).toBeCloseTo(60.67 - leadingShiftPx(10, 14), 0);
+    expect(topPx('Heading line')).toBeCloseTo(85.33 - leadingShiftPx(17, 22), 0);
+    expect(topPx('-18 %')).toBeCloseTo(120.67 - leadingShiftPx(26, 32), 0);
   });
 
   // The browser reports an inline element by its content area, which a tight
@@ -466,8 +472,10 @@ describe('browser single-line fidelity', () => {
     const [plain, padded] = measured;
 
     expect(plain.lineTop - plain.contentAreaTop).toBeGreaterThan(3);
-    expect(Math.abs(textTop('5–7 Mio. €') - plain.lineTop)).toBeLessThanOrEqual(1);
+    // 36px/30px is 27pt/22.5pt.
+    const shift = leadingShiftPx(27, 22.5);
+    expect(Math.abs(textTop('5–7 Mio. €') - (plain.lineTop - shift))).toBeLessThanOrEqual(1);
     // Padding does not move an inline element's line; the inset has to land on it.
-    expect(Math.abs(textTop('8–9 Mio. €') - padded.lineTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(textTop('8–9 Mio. €') - (padded.lineTop - shift))).toBeLessThanOrEqual(1);
   });
 });
