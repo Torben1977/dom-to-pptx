@@ -99,7 +99,10 @@ describe('composite border z-order', () => {
       const documentNode = new DOMParser().parseFromString(xml, 'text/xml');
       const shapeTree = documentNode.getElementsByTagName('p:spTree')[0];
       const drawingNodes = Array.from(shapeTree.children).filter((node) => ['p:sp', 'p:pic'].includes(node.tagName));
-      const gradientIndex = drawingNodes.findIndex((node) => node.tagName === 'p:pic');
+      // A linear gradient is a native gradient fill. jsdom answers a
+      // pseudo-element's style with its element's, so the export also holds
+      // pictures for ::before/::after that a browser would not draw.
+      const gradientIndex = drawingNodes.findIndex((node) => node.getElementsByTagName('a:gradFill').length > 0);
       const borderIndices = drawingNodes
         .map((node, index) => ({ node, index }))
         .filter(({ node }) => {

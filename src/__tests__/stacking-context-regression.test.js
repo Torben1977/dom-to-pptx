@@ -12,6 +12,8 @@ const html = `<!doctype html>
       .box { position: absolute; left: 100px; top: 100px; width: 240px; height: 160px; }
       .wrapper { position: absolute; inset: 0; }
       .card { margin: 100px; width: 300px; padding: 12px; background: #2563eb; color: #fff; font: 20px Arial, sans-serif; }
+      .veiled { position: relative; }
+      .veiled::after { content: ''; position: absolute; inset: 0; background: #d92d20; }
     </style>
   </head>
   <body>
@@ -41,6 +43,17 @@ const html = `<!doctype html>
     <section class="slide">
       <div class="card">Unter der Karte<div>Kind</div></div>
       <div class="box" style="z-index:1;background:#d92d20"></div>
+    </section>
+    <section class="slide">
+      <div class="box" style="background:#d92d20"></div>
+      <div class="card">Hinter dem Kasten<div>Kind</div></div>
+    </section>
+    <section class="slide">
+      <div class="card veiled">Unter dem Schleier<div>Kind</div></div>
+    </section>
+    <section class="slide">
+      <div class="box"><div style="height:80px;background:#2563eb"></div></div>
+      <div style="margin:120px 0 0 120px;width:100px;height:100px;background:#d92d20"></div>
     </section>
   </body>
 </html>`;
@@ -105,5 +118,17 @@ describe('CSS stacking contexts', () => {
 
   it('keeps loose text beneath a positioned sibling with a positive z-index', async () => {
     expect(await paintOrder(7)).toEqual(['2563EB', 'Unter der Karte', 'Kind', 'D92D20']);
+  });
+
+  it('paints a positioned element above the in-flow content after it', async () => {
+    expect(await paintOrder(8)).toEqual(['2563EB', 'Hinter dem Kasten', 'Kind', 'D92D20']);
+  });
+
+  it("paints a positioned ::after above its element's loose text and children", async () => {
+    expect(await paintOrder(9)).toEqual(['2563EB', 'Unter dem Schleier', 'Kind', 'D92D20']);
+  });
+
+  it('paints in-flow content with the positioned element it belongs to', async () => {
+    expect(await fillOrder(10)).toEqual(['D92D20', '2563EB']);
   });
 });

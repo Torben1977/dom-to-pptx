@@ -432,6 +432,25 @@ function verticalTextAlignment(value, startEdge = 'top') {
   return null;
 }
 
+// CSS paints a stacking context in layers (CSS 2.1 Appendix E): negative
+// z-index, then the in-flow content in tree order, then positioned elements and
+// stacking contexts with z-index auto or 0 in tree order, then positive z-index.
+// The layer between 0 and 1 is the positioned one; in-flow content inside a
+// positioned element paints with it.
+const POSITIONED_LAYER = 0.5;
+
+/**
+ * The layer a ::before or ::after paints in when it leaves the flow (positioned,
+ * translucent or transformed), or null when it stays in its element's flow.
+ */
+function pseudoElementPaintLayer(style) {
+  const positioned = (style.position || 'static') !== 'static';
+  const ownContext = (parseFloat(style.opacity) || 1) < 1 || (style.transform && style.transform !== 'none');
+  if (!positioned && !ownContext) return null;
+  const z = positioned ? parseInt(style.zIndex, 10) : NaN;
+  return Number.isNaN(z) || z === 0 ? POSITIONED_LAYER : z;
+}
+
 function compareKeys(keyA, keyB) {
   const len = Math.max(keyA.length, keyB.length);
   for (let i = 0; i < len; i++) {
@@ -618,11 +637,15 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
   }
 
   // Sync Traversal Function
-  function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null) {
+  // A sort key holds a [layer, tree order] pair per stacking context, from the
+  // slide down. `parentLayer` is the layer in-flow content takes in the current
+  // context: 0, or POSITIONED_LAYER inside a positioned element.
+  function collect(node, parentContextKey, parentOpacity = 1, inheritedAnimation = null, parentLayer = 0) {
     const order = domOrderCounter++;
 
     let currentSortKey;
     let childContextKey = parentContextKey;
+    let childLayer = parentLayer;
     let currentOpacity = parentOpacity;
     let nodeStyle = null;
     let skipCurrentNode = false;
@@ -650,13 +673,19 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
           zVal = parsedZ;
         }
       }
-      currentSortKey = parentContextKey.concat([zVal, order]);
-      if (establishesContext) childContextKey = currentSortKey;
+      const positioned = (nodeStyle.position || 'static') !== 'static';
+      const layer = establishesContext || positioned ? zVal || POSITIONED_LAYER : parentLayer;
+      currentSortKey = parentContextKey.concat([layer, order]);
+      if (establishesContext) {
+        childContextKey = currentSortKey;
+        childLayer = 0;
+      } else {
+        childLayer = layer;
+      }
     } else {
-      // A text node takes its tree slot like an element without z-index: above
-      // its parent's background, below the siblings that follow. The bare
-      // context key would sort it beneath every element of the context.
-      currentSortKey = parentContextKey.concat([0, order]);
+      // A text node is in-flow content: it takes its tree slot in its context's
+      // layer, above its parent's background and below positioned elements.
+      currentSortKey = parentContextKey.concat([parentLayer, order]);
     }
 
     // Prepare the item. If it needs async work, it returns a 'job'
@@ -671,6 +700,16 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
           _inheritedAnimation: inheritedAnimation,
         });
 
+    // A positioned ::before or ::after paints in its context's layer for its
+    // z-index, as the first or last child of its element.
+    const placePositionedPseudoItems = () => {
+      for (const item of result?.items || []) {
+        if (item.pseudoLayer === null || item.pseudoLayer === undefined) continue;
+        const slot = item.pseudo === '::before' ? order + 0.5 : domOrderCounter - 0.5;
+        item.zIndex = childContextKey.concat([item.pseudoLayer, slot]);
+      }
+    };
+
     if (result) {
       if (result.items) {
         // Push items immediately to queue (data might be missing but filled later)
@@ -680,7 +719,10 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
         // Push the promise-returning function to the task list
         asyncTasks.push(result.job);
       }
-      if (result.stopRecursion) return;
+      if (result.stopRecursion) {
+        placePositionedPseudoItems();
+        return;
+      }
     }
 
     // Recurse children synchronously.
@@ -697,8 +739,9 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     }
     for (let i = 0; i < childNodes.length; i++) {
       if (skipCurrentNode && childNodes[i].nodeType !== 1) continue;
-      collect(childNodes[i], childContextKey, currentOpacity, nextInheritedAnimation);
+      collect(childNodes[i], childContextKey, currentOpacity, nextInheritedAnimation, childLayer);
     }
+    placePositionedPseudoItems();
   }
 
   // 1. Traverse and build the structure (Fast)
@@ -3802,7 +3845,11 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       pptx,
       globalOptions
     );
-    if (pseudoBeforeRes?.item) items.unshift(pseudoBeforeRes.item);
+    if (pseudoBeforeRes?.item) {
+      pseudoBeforeRes.item.pseudo = '::before';
+      pseudoBeforeRes.item.pseudoLayer = pseudoElementPaintLayer(window.getComputedStyle(node, '::before'));
+      items.unshift(pseudoBeforeRes.item);
+    }
     if (pseudoBeforeRes?.job) pseudoJobs.push(pseudoBeforeRes.job);
 
     const pseudoAfterRes = preparePseudoElementItem(
@@ -3815,7 +3862,11 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
       pptx,
       globalOptions
     );
-    if (pseudoAfterRes?.item) items.push(pseudoAfterRes.item);
+    if (pseudoAfterRes?.item) {
+      pseudoAfterRes.item.pseudo = '::after';
+      pseudoAfterRes.item.pseudoLayer = pseudoElementPaintLayer(window.getComputedStyle(node, '::after'));
+      items.push(pseudoAfterRes.item);
+    }
     if (pseudoAfterRes?.job) pseudoJobs.push(pseudoAfterRes.job);
   }
 
