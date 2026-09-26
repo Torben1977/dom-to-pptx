@@ -15,6 +15,7 @@ import {
   isOutOfTextFlow,
   isVisuallySuppressed,
   measureWrapReservePx,
+  measureTextBaselinePx,
   powerPointLeadingCorrectionPt,
   isTextContainer,
   isTextContainerCached,
@@ -525,6 +526,47 @@ function compensatePowerPointLeading(options, liftPt) {
   options.margin = margin;
 }
 
+// At single line spacing both renderers seat the first baseline a fixed share of
+// the font size below the top of the inset, whatever the font's own ascent:
+// PowerPoint 0.94 em (0.922–0.958), LibreOffice 0.99 em (0.984–1.000), measured
+// over IBM Plex Sans, Arial, Georgia, Verdana and Times New Roman at 16–36 pt
+// (2026-09-26). The browser's text top is font-specific and matched neither;
+// the midpoint leaves both within 0.026 em of the browser's baseline.
+const RENDERER_BASELINE_EM = 0.966;
+
+/**
+ * A single-line frame has no line pitch to keep, so its line spacing only says
+ * where inside the line the renderer puts the text, and PowerPoint and
+ * LibreOffice answer differently (see POWERPOINT_LEADING_SHARE). At single
+ * spacing the frame goes where both renderers put the baseline on the
+ * browser's: moved as a whole when it paints nothing, through its top inset
+ * when it does.
+ */
+function placeSingleLineText(item) {
+  const options = item.options;
+  if (options.rotate || options.vert || options.textDirection || !Array.isArray(item.textParts)) return;
+  let fontPt = 0;
+  for (const run of item.textParts) {
+    if (!run.options) continue;
+    delete run.options.lineSpacing;
+    run.options.lineSpacingMultiple = 1;
+    fontPt = Math.max(fontPt, run.options.fontSize || 0);
+  }
+  if (!fontPt) return;
+  const textTop = item.singleLineBaseline - (RENDERER_BASELINE_EM * fontPt) / 72;
+  options.valign = 'top';
+  // createShapeMargin order: [left, right, bottom, top], in points.
+  const insetTop = Array.isArray(options.margin) ? options.margin[3] || 0 : 0;
+  if (!options.fill && !options.line) {
+    options.y = textTop - insetTop / 72;
+    return;
+  }
+  if (!Array.isArray(options.margin)) return;
+  const margin = [...options.margin];
+  margin[3] = Math.max(0, (textTop - options.y) * 72);
+  options.margin = margin;
+}
+
 /** The same for a table cell, through its top margin ([top, right, bottom, left] in inches). */
 function compensateCellLeading(cell) {
   const margin = cell?.options?.margin;
@@ -685,6 +727,7 @@ async function processSlide(root, slide, pptx, globalOptions = {}) {
     if (item.type === 'shape') slide.addShape(item.shapeType, item.options);
     if (item.type === 'image') slide.addImage(item.options);
     if (item.type === 'text') {
+      if (item.singleLineBaseline !== undefined) placeSingleLineText(item);
       compensatePowerPointLeading(item.options, powerPointLeadingCorrectionPt(item.textParts));
       slide.addText(item.textParts, item.options);
     }
@@ -3779,6 +3822,24 @@ function prepareRenderItem(node, config, domOrder, pptx, effectiveZIndex, comput
           for (const j of pseudoJobs) await j();
         }
       : null;
+
+  // A single-line text frame is placed by where its text starts rather than by
+  // its line spacing (see placeSingleLineText).
+  if (
+    Array.isArray(textPayload?.text) &&
+    rotation === 0 &&
+    !(writingModeVert && writingModeVert !== 'none') &&
+    isRenderedSingleLine(node) &&
+    !textPayload.text.some((part) => part?.options?.breakLine)
+  ) {
+    const baselinePx = measureTextBaselinePx(node);
+    if (baselinePx !== null) {
+      const baseline = config.offY + (baselinePx - config.rootY) * PX_TO_INCH * config.scale;
+      for (const item of items) {
+        if (item.type === 'text' && item.textParts === textPayload.text) item.singleLineBaseline = baseline;
+      }
+    }
+  }
 
   return { items, job: combinedJob, stopRecursion: !!textPayload || !!shadowSvg };
 }

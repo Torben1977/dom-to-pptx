@@ -1,12 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { exportHtmlToPptx } from '../node-exporter.js';
-import { powerPointLeadingCorrectionPt } from '../utils.js';
 
-// Text frames carry PowerPoint's leading correction (see powerpoint-leading.test.js):
-// a line of this size and height moves up by this much, in CSS px.
-const leadingShiftPx = (sizePt, linePt) =>
-  powerPointLeadingCorrectionPt([{ options: { fontSize: sizePt, lineSpacing: linePt } }]) / 0.75;
+// At single line spacing Office seats a single-line frame's baseline about
+// 0.966 em below its top (see powerpoint-leading.test.js), so that is where the
+// converter puts the frame above the browser's baseline.
+const BASELINE_EM = 0.966;
+
+/** The browser's baseline and font size of each element matched by `selector`, in CSS px. */
+async function browserBaselines(html, selector) {
+  const { default: puppeteer } = await import('puppeteer');
+  const browser = await puppeteer.launch({
+    executablePath: await puppeteer.executablePath(),
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setContent(html);
+    return await page.evaluate(
+      (sel) =>
+        Array.from(document.querySelectorAll(sel), (element) => {
+          const marker = document.createElement('span');
+          marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+          element.appendChild(marker);
+          const baseline = marker.getBoundingClientRect().bottom;
+          marker.remove();
+          return { baseline, fontPx: parseFloat(getComputedStyle(element).fontSize) };
+        }),
+      selector
+    );
+  } finally {
+    await browser.close();
+  }
+}
+
+/** Where Office starts a single-line frame's text for this browser line, in CSS px. */
+const expectedTextTop = ({ baseline, fontPx }) => baseline - BASELINE_EM * fontPx;
 
 function shapeFor(xml, text) {
   const textIndex = xml.indexOf(`<a:t>${text}</a:t>`);
@@ -410,20 +441,22 @@ describe('browser single-line fidelity', () => {
     });
     const xml = await (await JSZip.loadAsync(buffer)).file('ppt/slides/slide1.xml').async('string');
     const topPx = (text) => Number(shapeFor(xml, text).match(/<a:off x="\d+" y="(\d+)"/)[1]) / (914_400 / 96);
+    // 19.33 px of the 102.67 px stack run out of the 64 px content box above and
+    // below; each single-line frame keeps its own paragraph's baseline.
+    const [label, heading, number] = await browserBaselines(html, '.box p');
 
-    // The line heights fix the layout: 18.67 + 6 + 29.33 + 6 + 42.67 px in a 64 px
-    // content box from 80 px, centred, so the paragraphs start 19.33 px above it.
-    expect(topPx('LABEL')).toBeCloseTo(60.67 - leadingShiftPx(10, 14), 0);
-    expect(topPx('Heading line')).toBeCloseTo(85.33 - leadingShiftPx(17, 22), 0);
-    expect(topPx('-18 %')).toBeCloseTo(120.67 - leadingShiftPx(26, 32), 0);
+    expect(label.baseline - label.fontPx).toBeLessThan(80);
+    expect(topPx('LABEL')).toBeCloseTo(expectedTextTop(label), 0);
+    expect(topPx('Heading line')).toBeCloseTo(expectedTextTop(heading), 0);
+    expect(topPx('-18 %')).toBeCloseTo(expectedTextTop(number), 0);
   });
 
   // The browser reports an inline element by its content area, which a tight
-  // line-height leaves taller than the line. A frame placed at the content area
-  // put the figure 2–3 px above the browser's in Office. Each figure starts the
-  // second line of its block, so the line begins where the label above it ends;
-  // `nowrap` gives it a frame of its own, as in the deck it came from.
-  it('starts the text of an inline element on its line, not at its taller content area', async () => {
+  // line-height leaves taller than the line; neither is where Office should put
+  // the text. A single-line frame is seated on the browser's baseline instead,
+  // with or without padding around the element. `nowrap` gives each figure a
+  // frame of its own, as in the deck it came from.
+  it("seats the text of an inline element on the browser's baseline", async () => {
     const html = `<!doctype html><html><head><style>
         * { box-sizing: border-box; margin: 0; }
         .slide { position: relative; width: 1280px; height: 720px; background: white; padding: 64px; font: 16px Arial, sans-serif; }
@@ -433,27 +466,7 @@ describe('browser single-line fidelity', () => {
         <div class="range"><span>Potenzial pro Jahr</span><strong>5–7 Mio. €</strong></div>
         <div class="range padded"><span>Mit Innenabstand</span><strong>8–9 Mio. €</strong></div>
       </section></body></html>`;
-
-    const { default: puppeteer } = await import('puppeteer');
-    const browser = await puppeteer.launch({
-      executablePath: await puppeteer.executablePath(),
-      headless: true,
-      args: ['--no-sandbox'],
-    });
-    let measured;
-    try {
-      const page = await browser.newPage();
-      await page.setViewport({ width: 1280, height: 720 });
-      await page.setContent(html);
-      measured = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('.range'), (range) => ({
-          lineTop: range.querySelector('span').getBoundingClientRect().bottom,
-          contentAreaTop: range.querySelector('strong').getBoundingClientRect().top,
-        }))
-      );
-    } finally {
-      await browser.close();
-    }
+    const [plain, padded] = await browserBaselines(html, '.range strong');
 
     const buffer = await exportHtmlToPptx(html, {
       selector: '.slide',
@@ -469,13 +482,9 @@ describe('browser single-line fidelity', () => {
         EMU_PER_PX
       );
     };
-    const [plain, padded] = measured;
 
-    expect(plain.lineTop - plain.contentAreaTop).toBeGreaterThan(3);
-    // 36px/30px is 27pt/22.5pt.
-    const shift = leadingShiftPx(27, 22.5);
-    expect(Math.abs(textTop('5–7 Mio. €') - (plain.lineTop - shift))).toBeLessThanOrEqual(1);
-    // Padding does not move an inline element's line; the inset has to land on it.
-    expect(Math.abs(textTop('8–9 Mio. €') - (padded.lineTop - shift))).toBeLessThanOrEqual(1);
+    expect(Math.abs(textTop('5–7 Mio. €') - expectedTextTop(plain))).toBeLessThanOrEqual(1);
+    // Padding does not move an inline element's baseline; the inset has to land on it.
+    expect(Math.abs(textTop('8–9 Mio. €') - expectedTextTop(padded))).toBeLessThanOrEqual(1);
   });
 });

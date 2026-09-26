@@ -158,17 +158,25 @@ officeDescribe('LibreOffice visual round trip', () => {
     expect(legalBody.yMin).toBeGreaterThan(legalHeading.yMax);
   });
 
+  // The order, not a gap between font boxes: at these tight line heights the
+  // browser itself lets the boxes of value and unit overlap by 1 px while their
+  // ink stays 10 px apart. Office may add up to the 0.026 em it seats a baseline
+  // off the browser's (see powerpoint-leading.test.js).
+  const FONT_BOX_OVERLAP_PT = 1.5;
+
   it('keeps metric values, units, and labels in their intended vertical order', () => {
     const value = lineWith(4, '1,8');
     const unit = lineWith(4, 'Mio.');
     const label = lineWith(4, 'Vorgänge pro Jahr');
-    expect(unit.yMin).toBeGreaterThanOrEqual(value.yMax);
+    expect(unit.yMin).toBeGreaterThan(value.yMin);
+    expect(unit.yMin).toBeGreaterThanOrEqual(value.yMax - FONT_BOX_OVERLAP_PT);
     expect(label.yMin).toBeGreaterThan(unit.yMax);
 
     const periodStart = lineWith(4, '2027–');
     const periodEnd = lineWith(4, '2029');
     const periodLabel = lineStartingWith(4, 'Zeitraum des');
-    expect(periodEnd.yMin).toBeGreaterThanOrEqual(periodStart.yMax);
+    expect(periodEnd.yMin).toBeGreaterThan(periodStart.yMin);
+    expect(periodEnd.yMin).toBeGreaterThanOrEqual(periodStart.yMax - FONT_BOX_OVERLAP_PT);
     expect(periodLabel.yMin).toBeGreaterThan(periodEnd.yMax);
   });
 

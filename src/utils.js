@@ -338,6 +338,44 @@ export function extractTableData(node, scale, pseudoContentByNode = null) {
   return { rows, colWidths, rowHeights };
 }
 
+/** Whether `element` flows in the text of `root`: no box between them left the flow. */
+function isInTextFlowOf(element, root) {
+  for (let current = element; current && current !== root; current = current.parentElement) {
+    if (isOutOfTextFlow(window.getComputedStyle(current))) return false;
+  }
+  return true;
+}
+
+/**
+ * The baseline of the browser's line of text in `node`, in CSS px from the
+ * viewport top: the bottom of a zero-size inline-block the browser seats on it,
+ * put right after the first in-flow text for the measurement and taken out
+ * again. At the end of `node` it would open a line of its own after a block
+ * child. Null without text or layout (jsdom), and where that text sits in a flex
+ * or grid container, whose children are laid out as items rather than on a line.
+ */
+export function measureTextBaselinePx(node) {
+  if (typeof document.createRange().getClientRects !== 'function') return null;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let text = walker.nextNode();
+  while (text) {
+    const parent = text.parentElement;
+    if (parent && text.textContent.trim() && !isVisuallySuppressed(parent) && isInTextFlowOf(parent, node)) break;
+    text = walker.nextNode();
+  }
+  if (!text) return null;
+  const display = window.getComputedStyle(text.parentElement).display || '';
+  if (display.includes('flex') || display.includes('grid')) return null;
+  const marker = document.createElement('span');
+  marker.style.cssText = 'display:inline-block;width:0;height:0;margin:0;padding:0;border:0;vertical-align:baseline';
+  text.parentNode.insertBefore(marker, text.nextSibling);
+  try {
+    return marker.getBoundingClientRect().bottom;
+  } finally {
+    marker.remove();
+  }
+}
+
 // Upper bound of the room wrapped text gets beyond the browser's content edge:
 // max(8 px, 3 % of the content width), the reserve claude.ai's slide export uses.
 const WRAP_RESERVE_MIN_PX = 8;
@@ -386,19 +424,12 @@ export function measureWrapReservePx(node, style) {
     }
     return { block, right: edges.get(block) };
   };
-  const inFlow = (element) => {
-    for (let current = element; current && current !== node; current = current.parentElement) {
-      if (isOutOfTextFlow(window.getComputedStyle(current))) return false;
-    }
-    return true;
-  };
-
   // One entry per line piece of a word; a word the browser hyphenated has two.
   const pieces = [];
   const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
   for (let text = walker.nextNode(); text; text = walker.nextNode()) {
     const parent = text.parentElement;
-    if (!parent || isVisuallySuppressed(parent) || !inFlow(parent)) continue;
+    if (!parent || isVisuallySuppressed(parent) || !isInTextFlowOf(parent, node)) continue;
     const edge = blockRight(parent);
     const pattern = /\S+/g;
     let match;
